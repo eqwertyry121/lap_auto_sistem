@@ -81,8 +81,11 @@ func (f *Funnel) RefreshMarket(ctx context.Context, cfg *config.Config, log *slo
 	f.gpus = gpus
 	f.rate = m.RsdEurRate()
 	f.mu.Unlock()
+	hed := m.Hedonic()
 	log.Info("воронка: рынок обновлён",
 		"лотов", len(m.Lots()), "пул", len(m.Pool()),
+		"hedonic_usable", hed.Usable, "hedonic_n", hed.N,
+		"hedonic_r2", fmt.Sprintf("%.3f", hed.R2),
 		"курс_rsd", fmt.Sprintf("%.2f", m.RsdEurRate()), "источник_курса", m.RateSource(),
 		"dgpu_only", cfg.RequireDGPU)
 }
@@ -185,6 +188,12 @@ func manualAlertWorthy(priceEUR float64, minEUR int) bool {
 	return priceEUR >= float64(minEUR)
 }
 
+// mooseAlertWorthy — порог цены для ЛОСЬ-сводки (PLAN_v8): дешёвое редкое
+// железо без рыночной группы — шум, дешевле minEUR пишем только в аудит.
+func mooseAlertWorthy(priceEUR float64, minEUR int) bool {
+	return priceEUR >= float64(minEUR)
+}
+
 // ---------- полный прогон лота ----------
 
 // Outcome — результат прогона для вызывающего кода.
@@ -209,7 +218,7 @@ func Run(ctx context.Context, f *Funnel, cfg *config.Config, gem *vision.GeminiC
 	tr.f("заголовок: %s", ad.Name)
 	tr.f("цена: %s → %.0f€ · продавец: %s (user_id=%d)",
 		models.FormatPrice(float64(ad.Price), ad.Currency), priceEUR, detail.Seller(), ad.UserID)
-	tr.f("метки KP (справочно, НЕ используются): trgovac=%v kp_izlog=%v condition=%q",
+	tr.f("метки KP (используются в L1 как М1/М2): trgovac=%v kp_izlog=%v condition=%q",
 		detail.IsTrader(), detail.KPIzlog, detail.Condition)
 
 	// ---- Бан-лист (PLAN_v5, Фаза A): запрещённые линейки (MacBook) ----
@@ -242,11 +251,11 @@ func Run(ctx context.Context, f *Funnel, cfg *config.Config, gem *vision.GeminiC
 	}
 	if v := filters.L1(facts); v.Class == filters.ClassShop {
 		bump("L1_SHOP")
-		tr.f("L1: МАГАЗИН по тексту описания — %s → итог SHOP (тихо)", strings.Join(v.Reasons, "; "))
+		tr.f("L1: МАГАЗИН — %s → итог SHOP (тихо)", strings.Join(v.Reasons, "; "))
 		flush()
 		return silent(vcShop, strings.Join(v.Reasons, "; "))
 	}
-	tr.f("L1: пройден (в тексте описания нет магазинных признаков)")
+	tr.f("L1: пройден (нет магазинных признаков: ни меток KP, ни маркеров текста)")
 
 	// ---- L2: хлам ----
 	junk := filters.L2(facts)
@@ -520,7 +529,13 @@ func Run(ctx context.Context, f *Funnel, cfg *config.Config, gem *vision.GeminiC
 		return Outcome{Code: code, Status: models.StatusAlerted, AlertText: text, AlertURL: ad.URL(), Audit: audit}
 	case vcMoose:
 		bump(code)
-		tr.f("ИТОГ: ЛОСЬ — железо добыто, сравнить не с чем → сводка в Telegram")
+		if !mooseAlertWorthy(priceEUR, cfg.MooseMinEUR) {
+			tr.f("ИТОГ: ЛОСЬ тихо — сравнить не с чем · цена %.0f€ < порога %d€ (время не тратим)",
+				priceEUR, cfg.MooseMinEUR)
+			flush()
+			return Outcome{Code: code, Status: models.StatusNoDeal, Audit: audit}
+		}
+		tr.f("ИТОГ: ЛОСЬ — редкое железо, сравнить не с чем → сводка в Telegram")
 		flush()
 		text := mooseAlertText(ad, specsScore, lot, nuance)
 		return Outcome{Code: code, Status: models.StatusNeedCheck, AlertText: text, AlertURL: ad.URL(), Audit: audit}
@@ -812,17 +827,21 @@ func valueAlertText(code string, ad models.SearchAd, specsScore string, lot pric
 	return b.String()
 }
 
-// mooseAlertText — «Владелец лось, но я добыл инфу» (PLAN_v7): железо опознано
-// (в т.ч. через интернет по модели/фото), но в НАШИХ данных KP нет группы для
-// сравнения цены (новое/редкое железо). Шлём сводку: что за железо и цена.
+// mooseAlertText — «Редкое железо — сравнить не с чем» (PLAN_v8). Железо
+// опознано (часто ПРЯМО из объявления), но в наших данных KP нет группы для
+// сравнения цены. Текст не делает заявлений о продавце: формулировка v7
+// «владелец лось, но я добыл инфу» клеветала на продавцов, у которых все
+// характеристики были указаны в самом лоте (кейсы дня 2026-08-06).
 func mooseAlertText(ad models.SearchAd, specsScore string, lot pricing.Lot, nuance string) string {
 	var b strings.Builder
-	b.WriteString("🦌 <b>ВЛАДЕЛЕЦ ЛОСЬ, НО Я ДОБЫЛ ИНФУ</b>\n\n")
+	b.WriteString("🦌 <b>РЕДКОЕ ЖЕЛЕЗО — СРАВНИТЬ НЕ С ЧЕМ</b>\n\n")
 	fmt.Fprintf(&b, "<b>%s</b>\n", html.EscapeString(truncateRunes(ad.Name, 90)))
 	fmt.Fprintf(&b, "Железо: %s\n", html.EscapeString(specsScore))
-	fmt.Fprintf(&b, "Мощность: %.0f баллов · %.0f баллов/€1000\n", lot.Composite(), lot.ValuePer1000())
+	if lot.Composite() > 0 {
+		fmt.Fprintf(&b, "Мощность: %.0f баллов · %.0f баллов/€1000\n", lot.Composite(), lot.ValuePer1000())
+	}
 	fmt.Fprintf(&b, "Цена: <b>€%.0f</b>\n", lot.Price)
-	b.WriteString("ℹ️ В наших данных KP пока нет похожих лотов — сравнить цену не с чем (новое/редкое железо). Реши по цифрам выше.\n")
+	b.WriteString("ℹ️ В наших данных KP нет похожих лотов — оценить цену не с чем. Реши по цифрам выше.\n")
 	if nuance != "" {
 		fmt.Fprintf(&b, "Нюанс: %s\n", html.EscapeString(nuance))
 	}

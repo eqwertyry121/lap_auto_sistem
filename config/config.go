@@ -49,6 +49,7 @@ type Config struct {
 	// модель→железо), а НЕ для цен. Цены — только наши данные KP.
 	WebResearch  bool // WEB_RESEARCH=0: выключить интернет-определение железа (по умолчанию включён)
 	ManualMinEUR int  // MANUAL_MIN_EUR: алерт «нужно посмотреть» только от этой цены (400)
+	MooseMinEUR  int  // MOOSE_MIN_EUR: ЛОСЬ-сводка (редкое железо) только от этой цены (400)
 
 	// PLAN_v5: арбитраж ноутбуков с дискретной графикой.
 	BannedModels []string // BANNED_MODELS: запрещённые линейки через запятую (macbook)
@@ -91,6 +92,7 @@ func Load() *Config {
 
 		WebResearch:  envStr("WEB_RESEARCH", "1") == "1",
 		ManualMinEUR: envInt("MANUAL_MIN_EUR", 400),
+		MooseMinEUR:  envInt("MOOSE_MIN_EUR", 400),
 
 		BannedModels: envList("BANNED_MODELS", "macbook"),
 		RequireDGPU:  envStr("REQUIRE_DGPU", "1") == "1",

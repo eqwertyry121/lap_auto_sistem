@@ -9,14 +9,16 @@ import (
 // плоский текст после stripHTML (теги → пробелы).
 const realShopMultilisting = `✨ GARANCIJA na ispravnost 12 meseci! ✨ MOGUĆNOST ZAMENE ILI ODUSTANKA od kupovine u roku od 30 dana! ✨ MOGUĆNOST PLAĆANJA PUTEM FAKTURE ✨ Brza dostava širom Srbije! Imamo više modela na stanju. Kliknite na "SVI OGLASI" (telefon) Kliknite na "KP IZLOG" (računar) POUZDANI POLOVNI LAPTOPOVI NOVI SAD NAJTRAŽENIJI MODELI • HP EliteBook 840 G6 | i5-8265U | 16GB | 512GB SSD | 235€ • Lenovo ThinkPad T490 | i7-8665U | 16GB | 512GB SSD | 270€ • Dell Vostro 15.6" | i5-1135G7 | 16GB | 256GB SSD | 300€ OSTALI MODELI IZ PONUDE: #01-Odlican laptop Apple MacBook Pro M2 16GB 1TB 13" A2338-850€ #05-Lenovo thinkpad t15 15.6" 4K ekran i7/32gb dve grafike-650€ #12-Dell latitude 15.6" intel i5-10210U 16GB RAM 512GB SSD-300€`
 
-func TestL1_IgnoresKPMarks(t *testing.T) {
-	// Решение 2026-08-05: метки интерфейса KP (Trgovac/KP Izlog) НЕ
-	// являются основанием для среза — только текст описания.
-	if v := L1(AdFacts{IsTrader: true, Title: "Laptop i5", Description: "Prodajem svoj laptop."}); v.Class == ClassShop {
-		t.Errorf("IsTrader=true не должен резать без магазинного текста: %v", v.Reasons)
+func TestL1_KPMarksAreShop(t *testing.T) {
+	// PLAN_v8 (2026-08-06, решение пользователя): честные метки KP снова
+	// режут. is_trader больше не врёт — флаг ставится только при title
+	// «Trgovac» (заявленный торговец), регрессия в models/models_test.go.
+	// Решение 2026-08-05 «метки не использовать» отменено.
+	if v := L1(AdFacts{IsTrader: true, Title: "Laptop i5", Description: "Prodajem svoj laptop."}); v.Class != ClassShop {
+		t.Errorf("IsTrader=true (заявленный торговец) должен резать: %s (%v)", v.Class, v.Reasons)
 	}
-	if v := L1(AdFacts{KPIzlog: true, Title: "Laptop i5", Description: "Prodajem svoj laptop."}); v.Class == ClassShop {
-		t.Errorf("KPIzlog=true не должен резать без магазинного текста: %v", v.Reasons)
+	if v := L1(AdFacts{KPIzlog: true, Title: "Laptop i5", Description: "Prodajem svoj laptop."}); v.Class != ClassShop {
+		t.Errorf("KPIzlog=true (витрина) должен резать: %s (%v)", v.Class, v.Reasons)
 	}
 }
 
@@ -57,13 +59,38 @@ func TestL1_PrivateSellerPasses(t *testing.T) {
 }
 
 func TestL1_IgnoresBehavioralSignals(t *testing.T) {
-	// Решение 2026-08-05: число лотов и возраст аккаунта НЕ режут —
-	// детекция только по тексту описания.
+	// Решение 2026-08-05 в силе для поведенческих сигналов: число лотов и
+	// возраст аккаунта НЕ режут (в отличие от честных меток KP, PLAN_v8).
 	if v := L1(AdFacts{Title: "Laptop i5", Description: "Prodajem svoj laptop.", SellerAds: 12}); v.Class == ClassShop {
 		t.Errorf("SellerAds не должен резать: %v", v.Reasons)
 	}
 	if v := L1(AdFacts{Title: "Laptop i5", Description: "Prodajem svoj laptop.", SellerAds: 4, SellerAgeDays: 20}); v.Class == ClassShop {
 		t.Errorf("молодой аккаунт не должен резать: %v", v.Reasons)
+	}
+}
+
+// Реальный перекуп дня 2026-08-06 (лот 194371772, Acer VX15): без меток KP,
+// без маркеров v2, но самовывоз в 5 городах + маркетинговый суперлатив.
+const realResellerMulticity = `TECH SPECS (VX15) Operating System: Windows 10 Home Processor: Intel Core i5-7300HQ Memory: 12GB DDR4 prodaje se ispravan laptop, instaliran je win 10, laptop tragovi koristenja, vidi slike baterija dobra, healt 77 procenata, drzi oko 2.5 sata prodaje se sa punjacem acer, ukoliko zelite bez punjaca cena je 200e moguce licno preuzimanje u dole navedene gradove BEOGRAD ZRENJANIN KIKINDA NOVI SAD SUBOTICA . . NAJPOVOLJNIJA CENA LAPTOPA ZA OVAKVU KONFIGURACIJU . .`
+
+func TestL1_ResellerMulticity(t *testing.T) {
+	v := L1(AdFacts{Title: "Acer Aspire VX15 VX5-591G Core i5-7300HQ GTX 1050 Ti Laptop",
+		Description: realResellerMulticity})
+	if v.Class != ClassShop {
+		t.Fatalf("перекуп с доставкой по 5 городам не распознан: %s (%v)", v.Class, v.Reasons)
+	}
+	joined := strings.Join(v.Reasons, "; ")
+	if !strings.Contains(joined, "М7") {
+		t.Errorf("среди причин нет М7 (мультигород): %v", v.Reasons)
+	}
+}
+
+func TestL1_MulticityAloneNotEnough(t *testing.T) {
+	// М7 даёт вес 1.0 — без второго маркера порог 2.0 не берётся.
+	v := L1(AdFacts{Title: "Laptop",
+		Description: "Licno preuzimanje: BEOGRAD, ZRENJANIN, KIKINDA, SUBOTICA."})
+	if v.Class == ClassShop {
+		t.Errorf("одного мультигорода должно не хватать: %s (%v)", v.Class, v.Reasons)
 	}
 }
 
@@ -135,6 +162,27 @@ func TestL2_PriceCrossCheck(t *testing.T) {
 	v = L2(AdFacts{Title: "Laptop ne radi", PriceEUR: 50, MedianEUR: 300})
 	if v.Class != JunkPartsOnly {
 		t.Errorf("цена трупа: got %s, want PARTS_ONLY", v.Class)
+	}
+}
+
+func TestL2_BezPunjacaContext(t *testing.T) {
+	// Регрессия кейса VX15 (2026-08-06): «prodaje se sa punjacem … ukoliko
+	// zelite bez punjaca cena je 200e» — зарядка В КОМПЛЕКТЕ, «без зарядки» —
+	// условный вариант со скидкой, а не дефект.
+	v := L2(AdFacts{Title: "Acer Aspire VX15",
+		Description: "prodaje se sa punjacem acer, ukoliko zelite bez punjaca cena je 200e"})
+	if v.Class == JunkDefect {
+		t.Errorf("зарядка в комплекте — не дефект: %s (%v)", v.Class, v.Reasons)
+	}
+	// Только условный оборот без «sa punjacem» — тоже не дефект.
+	v = L2(AdFacts{Title: "Laptop", Description: "ukoliko zelite bez punjaca, cena je niza"})
+	if v.Class == JunkDefect {
+		t.Errorf("условное «без зарядки» — не дефект: %s (%v)", v.Class, v.Reasons)
+	}
+	// Честное «без зарядки» без контекста — дефект.
+	v = L2(AdFacts{Title: "Laptop", Description: "prodajem laptop bez punjaca, izgubljen"})
+	if v.Class != JunkDefect {
+		t.Errorf("честное «без зарядки» должно быть дефектом: %s (%v)", v.Class, v.Reasons)
 	}
 }
 

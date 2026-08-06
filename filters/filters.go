@@ -52,12 +52,22 @@ var (
 	pipePriceRe = regexp.MustCompile(`\|[^|]{0,40}€`)
 )
 
-// L1 — фильтр магазинов. Решение 2026-08-05: детекция ТОЛЬКО по тексту
-// описания. Метки интерфейса KP («Trgovac»=IsTrader, «KP Izlog»=KPIzlog)
-// и поведенческие подсчёты (число лотов, возраст аккаунта) НЕ используются —
-// только слова и структура самого описания. UNKNOWN трактуется вызывающим
-// кодом как PRIVATE.
+// L1 — фильтр магазинов. PLAN_v8 (2026-08-06): к детекции по тексту описания
+// (М4, М5) добавлены ЧЕСТНЫЕ метки KP (М1, М2) — решение 2026-08-05 «метки не
+// использовать» отменено пользователем после починки is_trader: KP присылает
+// объект trader ВСЕМ, и только title «Trgovac» означает заявленного торговца
+// (регрессия в models/models_test.go). Поведенческие подсчёты (число лотов,
+// возраст аккаунта) по-прежнему НЕ используются. UNKNOWN трактуруется
+// вызывающим кодом как PRIVATE.
 func L1(f AdFacts) Verdict {
+	// М1/М2 — честные метки KP: заявленный торговец или витрина.
+	if f.IsTrader {
+		return Verdict{ClassShop, []string{"М1: KP пометил продавца торговцем (title «Trgovac»)"}}
+	}
+	if f.KPIzlog {
+		return Verdict{ClassShop, []string{"М2: витрина KP Izlog — профессиональный продавец"}}
+	}
+
 	textNorm := normalize(f.Title + " " + f.Description)
 
 	// М4 — мультилистинг: один лот = прайс-лист на много машин.
@@ -70,7 +80,8 @@ func L1(f AdFacts) Verdict {
 			[]string{fmt.Sprintf("М4: %d ячеек «| … €» — табличный прайс", n)}}
 	}
 
-	// М5 — маркеры описаний (взвешенная сумма слов из текста).
+	// М5 — маркеры описаний (взвешенная сумма слов из текста; М7 «мультигород»
+	// считается внутри markerWeight).
 	weight, reasons := markerWeight(textNorm)
 	if weight >= ThresholdL1 {
 		return Verdict{ClassShop,
@@ -108,10 +119,43 @@ func L2(f AdFacts) Verdict {
 	}
 
 	for _, m := range defectMarkers {
-		if strings.Contains(textNorm, m) {
-			return Verdict{JunkDefect, []string{"дефект: «" + m + "»"}}
+		if !strings.Contains(textNorm, m) {
+			continue
 		}
+		// «bez punjaca» часто не дефект, а условие: зарядка в комплекте,
+		// «без зарядки» — вариант со скидкой (кейс VX15, 2026-08-06).
+		if m == "bez punjaca" && chargerIsIncluded(textNorm) {
+			continue
+		}
+		return Verdict{JunkDefect, []string{"дефект: «" + m + "»"}}
 	}
 
 	return Verdict{JunkClean, nil}
+}
+
+// chargerIsIncluded — «bez punjaca» НЕ дефект, если (а) зарядка явно в
+// комплекте («sa punjacem» и пр.) или (б) ВСЕ вхождения стоят в условном
+// обороте («ukoliko zelite bez punjaca cena je 200e» — опция скидки).
+func chargerIsIncluded(textNorm string) bool {
+	for _, ok := range []string{"sa punjacem", "punjac ide uz", "punjac u kompletu", "punjac je ukljucen"} {
+		if strings.Contains(textNorm, ok) {
+			return true
+		}
+	}
+	rest := textNorm
+	for {
+		idx := strings.Index(rest, "bez punjaca")
+		if idx < 0 {
+			return true
+		}
+		from := idx - 30
+		if from < 0 {
+			from = 0
+		}
+		window := rest[from:idx]
+		if !strings.Contains(window, "ukoliko") && !strings.Contains(window, "ako ") {
+			return false
+		}
+		rest = rest[idx+len("bez punjaca"):]
+	}
 }

@@ -1,9 +1,12 @@
 ﻿package funnel
 
 import (
+	"strings"
 	"testing"
 
 	"kpbot/filters"
+	"kpbot/models"
+	"kpbot/pricing"
 )
 
 func TestDecideL0(t *testing.T) {
@@ -98,6 +101,42 @@ func TestManualAlertWorthy(t *testing.T) {
 		if got := manualAlertWorthy(c.price, c.minEUR); got != c.want {
 			t.Errorf("manualAlertWorthy(%.2f, %d) = %v, want %v", c.price, c.minEUR, got, c.want)
 		}
+	}
+}
+
+func TestMooseAlertWorthy(t *testing.T) {
+	cases := []struct {
+		price  float64
+		minEUR int
+		want   bool
+	}{
+		{399.99, 400, false}, // дешевле порога — только аудит
+		{400, 400, true},     // ровно порог — сводка в Telegram
+		{1100, 400, true},
+		{30, 400, false},
+	}
+	for _, c := range cases {
+		if got := mooseAlertWorthy(c.price, c.minEUR); got != c.want {
+			t.Errorf("mooseAlertWorthy(%.2f, %d) = %v, want %v", c.price, c.minEUR, got, c.want)
+		}
+	}
+}
+
+func TestMooseAlertText_NoOwnerClaims(t *testing.T) {
+	// PLAN_v8: текст НЕ характеризует продавца. Формулировка v7 «владелец
+	// лось, но я добыл инфу» клеветала на продавцов, у которых спеки указаны
+	// в самом объявлении (кейсы дня 2026-08-06: Legion 5, Acer VX15).
+	ad := models.SearchAd{Name: "Lenovo Legion 5 slim 16 Ryzen 7 7735hs/16gb/1TB/4060",
+		AdURL: "/kompjuteri-laptop-i-tablet/laptopovi/oglas/194373542"}
+	lot := pricing.Lot{Price: 1100, CPUScore: 13693, GPUScore: 51866}
+	text := mooseAlertText(ad, "Ryzen 7 7735HS · 16GB · SSD 1024GB · RTX 4060", lot, "")
+	for _, banned := range []string{"ВЛАДЕЛЕЦ", "владелец", "добыл"} {
+		if strings.Contains(text, banned) {
+			t.Errorf("в тексте есть %q (характеристика продавца): %s", banned, text)
+		}
+	}
+	if !strings.Contains(text, "СРАВНИТЬ НЕ С ЧЕМ") {
+		t.Errorf("нет честного диагноза «сравнить не с чем»: %s", text)
 	}
 }
 
