@@ -1,0 +1,124 @@
+package specs
+
+import "testing"
+
+// Заголовки — реальные из датасета KP (data/research.csv).
+func TestExtractCPU(t *testing.T) {
+	cases := []struct{ text, want string }{
+		{"Lenovo ThinkPad T490 i7-8665U 16GB DDR4 512GB SSD nvme", "i7-8665U"},
+		{"Lenovo ThinkPad 15.6 i5-8265u 16gb 512g ssd #29", "i5-8265U"},
+		{"Dell 7550 i7-10750H/32GB/512GB NVMe/T2000 4GB/15.6\" FHD", "i7-10750H"},
+		{"Lenovo P16 gen1/i7 12850HX/32gb/1tb/Nvidia RTX A3000 12gb/2k", "i7-12850HX"},
+		{"Acer Predator Helios Neo 16 i7-13700HX/32GB DDR5/1TB/RTX4060", "i7-13700HX"},
+		{"HP EliteBook 630 G9 i5-1235U 16GB 256GB SSD +GARANCIJA", "i5-1235U"},
+		{"Laptop AMD Ryzen 5 4600H 8GB/512GB", "Ryzen 5 4600H"},
+		{"HP ZBook Studio Ultra 7 155H 32GB 1TB", "Ultra 7 155H"},
+		// PLAN_v5: каталожный формат магазинов + плюс-варианты.
+		{"LENOVO Legion Pro 7 Intel Core Ultra 9 Processor 290HX Plus RTX 5090", "Ultra 9 290HX Plus"},
+		{"HP Elitebook 6 G1a ULTRA 5 225U 16GB", "Ultra 5 225U"},
+		{"Gaming Ultra 9 285HX 32GB", "Ultra 9 285HX"},
+		{"GETAC X500 G3 XQ2SZ5WDTDXL Black", ""},
+		{"Laptop LENOVO IdeaPad 5 14ITL05 DOS/14\"IPS FHD", ""},
+		{"Laptopovi odmah spremni za rad +GARANCIJA 12 meseci Novi Sad", ""},
+	}
+	for _, c := range cases {
+		if got := ExtractCPU(c.text); got != c.want {
+			t.Errorf("ExtractCPU(%q) = %q, хочу %q", c.text, got, c.want)
+		}
+	}
+}
+
+func TestExtractGPU(t *testing.T) {
+	cases := []struct{ text, want string }{
+		{"Acer Predator Helios Neo 16 i7-13700HX/32GB DDR5/1TB/RTX4060", "RTX 4060"},
+		{"Gaming laptop GTX 1650 Ti 16GB", "GTX 1650 TI"},
+		{"Lenovo Legion 5 Ryzen 5 4600H RX 6600M", "RX 6600M"},
+		{"Dell 7550 i7-10750H/32GB/512GB NVMe/T2000 4GB", "T2000"},
+		{"HP EliteBook 840 G6 i5-8250U", ""},
+		// PLAN_v5, Фаза C: рабочие/профессиональные GPU.
+		{"Lenovo P16 gen1/i7 12850HX/32gb/1tb/Nvidia RTX A3000 12gb/2k", "RTX A3000"},
+		{"Dell Precision 5550 i7-10750H 16GB Quadro T2000", "Quadro T2000"},
+		{"HP ZBook Studio G5 i7-8850H Quadro P2000", "Quadro P2000"},
+		{"Apple MacBook Pro 16 i9 Radeon Pro 5500M", "Radeon Pro 5500M"},
+		{"Asus Zenbook Pro 14 i7-12700H Arc A370M", "Arc A370M"},
+		{"Lenovo P16v Ultra 7 165H 64gb ddr5 1Tb nvm rtx 500 ada 4gb", "RTX 500 Ada"},
+		{"Lenovo ThinkPad T490 i5-8265U 8GB", ""}, // T490 — модель ноутбука, не GPU
+		{"Lenovo ThinkPad T14 Gen 2 16GB", ""},    // T14 — не GPU
+	}
+	for _, c := range cases {
+		if got := ExtractGPU(c.text); got != c.want {
+			t.Errorf("ExtractGPU(%q) = %q, хочу %q", c.text, got, c.want)
+		}
+	}
+}
+
+func TestExtractMemory(t *testing.T) {
+	cases := []struct {
+		text     string
+		ram, ssd int
+	}{
+		{"Lenovo ThinkPad T490 i7-8665U 16GB DDR4 512GB SSD nvme", 16, 512},
+		{"Lenovo ThinkPad 15.6 i5-8265u 16gb 512g ssd #29", 16, 512},
+		{"Dell 7550 i7-10750H/32GB/512GB NVMe/T2000 4GB/15.6\" FHD", 32, 512},
+		{"Lenovo P16 gen1/i7 12850HX/32gb/1tb/Nvidia RTX A3000 12gb/2k", 32, 1024},
+		{"HP EliteBook 630 G9 i5-1235U 16GB 256GB SSD +GARANCIJA", 16, 256},
+		{"DELL Alienware 16X Aurora – Ultra 9 / 32GB RAM", 32, 0},
+		{"Radni laptop i5/16gb/SSD +GARANCIJA", 16, 0},
+		{"SSD 512GB nov, laptop", 0, 512},
+		{"Laptop 15.6\" FHD", 0, 0},
+	}
+	for _, c := range cases {
+		ram, ssd := ExtractMemory(c.text)
+		if ram != c.ram || ssd != c.ssd {
+			t.Errorf("ExtractMemory(%q) = (%d, %d), хочу (%d, %d)", c.text, ram, ssd, c.ram, c.ssd)
+		}
+	}
+}
+
+// ---------- Gemini-спеки (расширенный формат) ----------
+
+func TestParseGeminiSpecs_Full(t *testing.T) {
+	raw := `{"laptop_model": "HP EliteBook 840 G6", "cpu": "i5-8250U", "ram_gb": 8, "ssd_gb": 256, "gpu": "integrated", "why_no_cpu": ""}`
+	gs, err := ParseGeminiSpecs(raw)
+	if err != nil {
+		t.Fatalf("парсинг: %v", err)
+	}
+	if gs.LaptopModel != "HP EliteBook 840 G6" || gs.CPU != "i5-8250U" || gs.RAMGB != 8 || gs.SSDGB != 256 {
+		t.Errorf("поля: %+v", gs)
+	}
+	if !gs.GPUIntegrated() {
+		t.Errorf("gpu=integrated не распознан: %q", gs.GPU)
+	}
+}
+
+func TestParseGeminiSpecs_WhyNoCPU(t *testing.T) {
+	raw := "```json\n{\"laptop_model\": \"\", \"cpu\": \"\", \"ram_gb\": 8, \"ssd_gb\": 250, \"gpu\": \"\", \"why_no_cpu\": \"нет зацепок для определения модели\"}\n```"
+	gs, err := ParseGeminiSpecs(raw)
+	if err != nil {
+		t.Fatalf("парсинг: %v", err)
+	}
+	if gs.CPU != "" {
+		t.Errorf("cpu должен быть пуст: %q", gs.CPU)
+	}
+	if gs.WhyNoCPU == "" {
+		t.Error("why_no_cpu не сохранён")
+	}
+	if gs.GPUIntegrated() {
+		t.Error("пустой gpu не должен считаться встроенным")
+	}
+}
+
+func TestGPUIntegrated_Variants(t *testing.T) {
+	for _, v := range []string{"integrated", "встроенная", "Встроенная видеокарта", "встройка"} {
+		gs := GeminiSpecs{GPU: v}
+		if !gs.GPUIntegrated() {
+			t.Errorf("%q должен считаться встроенным", v)
+		}
+	}
+	for _, v := range []string{"", "RTX 3060", "RX 6600M"} {
+		gs := GeminiSpecs{GPU: v}
+		if gs.GPUIntegrated() {
+			t.Errorf("%q не должен считаться встроенным", v)
+		}
+	}
+}

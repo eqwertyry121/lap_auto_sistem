@@ -1,0 +1,117 @@
+﻿package funnel
+
+import (
+	"testing"
+
+	"kpbot/filters"
+)
+
+func TestDecideL0(t *testing.T) {
+	cases := []struct {
+		name     string
+		price    float64
+		exchange bool
+		title    string
+		wantPass bool
+	}{
+		{"норма", 300, false, "Lenovo ThinkPad T480", true},
+		{"нижняя граница", 0.5, false, "Лот за копейки", false},
+		{"нулевая", 0, false, "Подарок", false},
+		{"верхняя граница", 5001, false, "Монстр", false},
+		{"ровно 5000", 5000, false, "Дорогой", true},
+		{"обмен флагом", 300, true, "Ноутбук", false},
+		{"обмен в заголовке", 300, false, "Продам или zamena на телефон", false},
+	}
+	for _, c := range cases {
+		pass, _ := decideL0(c.price, c.exchange, c.title)
+		if pass != c.wantPass {
+			t.Errorf("%s: pass=%v, want %v", c.name, pass, c.wantPass)
+		}
+	}
+}
+
+func TestDecideBan(t *testing.T) {
+	banned := []string{"macbook"}
+	cases := []struct {
+		title   string
+		wantBan bool
+	}{
+		{"MacBook Air 13 M2 8GB 256GB SSD", true},
+		{"Apple MacBook Pro 14 2021", true},
+		{"Lenovo Legion 5 Ryzen 5 5600H RTX 3060", false},
+		{"HP Victus 15 i5-12450H RTX 3050", false},
+	}
+	for _, c := range cases {
+		got, _ := decideBan(c.title, banned)
+		if got != c.wantBan {
+			t.Errorf("decideBan(%q) = %v, want %v", c.title, got, c.wantBan)
+		}
+	}
+}
+
+func TestDecideL5(t *testing.T) {
+	base := l5Input{
+		JunkClass: filters.JunkClean, CPUName: "i5-1135G7", CPUScore: 10000,
+		DevOK: true, Dev: -0.20, N: 10,
+		diamondDev: -0.15, suspectDev: -0.40, marketTol: 0.05, minN: 5,
+	}
+	cases := []struct {
+		name string
+		mut  func(*l5Input)
+		want string
+	}{
+		{"алмаз", func(in *l5Input) {}, vcDiamond},
+		{"некритичный дефект не блокирует (нюанс)", func(in *l5Input) { in.JunkClass = filters.JunkDefect }, vcDiamond},
+		{"сомнительный хлам → проверка", func(in *l5Input) { in.JunkClass = filters.JunkUncertain }, vcCheck},
+		{"глубже −40% → подозрение", func(in *l5Input) { in.Dev = -0.55 }, vcSuspect},
+		{"молодой аккаунт на скидке → подозрение", func(in *l5Input) { in.YoungSeller = true }, vcSuspect},
+		{"мелкая группа → проверка", func(in *l5Input) { in.N = 3 }, vcCheck},
+		{"рыночная цена → тихо (не алерт)", func(in *l5Input) { in.Dev = 0.0 }, vcFair},
+		{"чуть ниже рынка, но не алмаз → тихо", func(in *l5Input) { in.Dev = -0.08 }, vcFair},
+		{"дороже рынка → тихо", func(in *l5Input) { in.Dev = 0.06 }, vcExpensive},
+		{"сильно дороже → тихо", func(in *l5Input) { in.Dev = 0.25 }, vcExpensive},
+		{"нет CPU → вручную", func(in *l5Input) { in.CPUName = ""; in.CPUScore = 0 }, vcManual},
+		{"CPU назван, но без балла → проверка", func(in *l5Input) { in.CPUScore = 0 }, vcCheck},
+		{"железо есть, сравнивать не с чем → ЛОСЬ", func(in *l5Input) { in.DevOK = false }, vcMoose},
+	}
+	for _, c := range cases {
+		in := base
+		c.mut(&in)
+		if got := decideL5(in); got != c.want {
+			t.Errorf("%s: got %s, want %s", c.name, got, c.want)
+		}
+	}
+}
+
+func TestManualAlertWorthy(t *testing.T) {
+	cases := []struct {
+		price  float64
+		minEUR int
+		want   bool
+	}{
+		{399.99, 400, false}, // дешевле порога — время не тратим
+		{400, 400, true},     // ровно порог — алерт
+		{1200, 400, true},
+		{50, 400, false},
+	}
+	for _, c := range cases {
+		if got := manualAlertWorthy(c.price, c.minEUR); got != c.want {
+			t.Errorf("manualAlertWorthy(%.2f, %d) = %v, want %v", c.price, c.minEUR, got, c.want)
+		}
+	}
+}
+
+func TestBuildSpecsLine(t *testing.T) {
+	if got := buildSpecsLine("Lenovo ThinkPad T480", "i5-1135G7", 16, 512, "RTX 3060", false); got != "Lenovo ThinkPad T480 · i5-1135G7 · 16GB · SSD 512GB · RTX 3060" {
+		t.Errorf("полная строка: %q", got)
+	}
+	if got := buildSpecsLine("", "i5-1135G7", 0, 0, "", false); got != "i5-1135G7" {
+		t.Errorf("только CPU: %q", got)
+	}
+	if got := buildSpecsLine("HP EliteBook 840 G6", "i5-8250U", 8, 0, "", true); got != "HP EliteBook 840 G6 · i5-8250U · 8GB · встроенная графика" {
+		t.Errorf("встроенная графика: %q", got)
+	}
+	if got := buildSpecsLine("", "", 0, 0, "", false); got != "железо не распознано" {
+		t.Errorf("пусто: %q", got)
+	}
+}

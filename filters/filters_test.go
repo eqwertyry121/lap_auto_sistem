@@ -1,0 +1,180 @@
+package filters
+
+import (
+	"strings"
+	"testing"
+)
+
+// Реальный мультилистинг из tools/eds_sample.json (магазин «Polovni Laptopovi»):
+// плоский текст после stripHTML (теги → пробелы).
+const realShopMultilisting = `✨ GARANCIJA na ispravnost 12 meseci! ✨ MOGUĆNOST ZAMENE ILI ODUSTANKA od kupovine u roku od 30 dana! ✨ MOGUĆNOST PLAĆANJA PUTEM FAKTURE ✨ Brza dostava širom Srbije! Imamo više modela na stanju. Kliknite na "SVI OGLASI" (telefon) Kliknite na "KP IZLOG" (računar) POUZDANI POLOVNI LAPTOPOVI NOVI SAD NAJTRAŽENIJI MODELI • HP EliteBook 840 G6 | i5-8265U | 16GB | 512GB SSD | 235€ • Lenovo ThinkPad T490 | i7-8665U | 16GB | 512GB SSD | 270€ • Dell Vostro 15.6" | i5-1135G7 | 16GB | 256GB SSD | 300€ OSTALI MODELI IZ PONUDE: #01-Odlican laptop Apple MacBook Pro M2 16GB 1TB 13" A2338-850€ #05-Lenovo thinkpad t15 15.6" 4K ekran i7/32gb dve grafike-650€ #12-Dell latitude 15.6" intel i5-10210U 16GB RAM 512GB SSD-300€`
+
+func TestL1_IgnoresKPMarks(t *testing.T) {
+	// Решение 2026-08-05: метки интерфейса KP (Trgovac/KP Izlog) НЕ
+	// являются основанием для среза — только текст описания.
+	if v := L1(AdFacts{IsTrader: true, Title: "Laptop i5", Description: "Prodajem svoj laptop."}); v.Class == ClassShop {
+		t.Errorf("IsTrader=true не должен резать без магазинного текста: %v", v.Reasons)
+	}
+	if v := L1(AdFacts{KPIzlog: true, Title: "Laptop i5", Description: "Prodajem svoj laptop."}); v.Class == ClassShop {
+		t.Errorf("KPIzlog=true не должен резать без магазинного текста: %v", v.Reasons)
+	}
+}
+
+func TestL1_RealMultilisting(t *testing.T) {
+	v := L1(AdFacts{Title: "Laptopovi odmah spremni za rad +GARANCIJA 12 meseci Novi Sad",
+		Description: realShopMultilisting})
+	if v.Class != ClassShop {
+		t.Fatalf("реальный мультилистинг не распознан: %s (%v)", v.Class, v.Reasons)
+	}
+	// Причина должна ссылаться на прайс-лист (М4) или маркеры (М5).
+	joined := strings.Join(v.Reasons, "; ")
+	if !strings.Contains(joined, "М4") && !strings.Contains(joined, "М5") {
+		t.Errorf("неожиданные причины: %v", v.Reasons)
+	}
+}
+
+// Реальный лот 194319150 (магазин «Best Buy 021», новая техника под заказ) —
+// проходил L1 до маркеров версии 2.
+const realCatalogShop = `BEST BUY - GARANTOVANO NAJBOLJA KUPOVINA Garancija 1-5 Godine! (koju resavate preko nas) Sve ide po porudzbini! Sva roba je nova i neotpakovana, u fabrickom pakovanju. Isporuka od 3 do 7 dana. Moguce licno preuzimanje ili slanje kurirskom sluzbom. Molim Vas, kontaktirajte me za aktuelne cene, posto se cesto menjaju. Mogucnost nabavke artikala koji nisu na mojim oglasima. Kontakt preko KP Poruka`
+
+func TestL1_CatalogShop(t *testing.T) {
+	v := L1(AdFacts{Title: "LENOVO Legion Pro 7 16IAX10H 83F500RBHV", Description: realCatalogShop})
+	if v.Class != ClassShop {
+		t.Fatalf("каталожный магазин не распознан: %s (%v)", v.Class, v.Reasons)
+	}
+}
+
+func TestL1_PrivateSellerPasses(t *testing.T) {
+	// Типичный частник: одна машина, без маркеров.
+	v := L1(AdFacts{
+		Title:       "Lenovo ThinkPad T480 i5-8250U 8GB 256GB SSD",
+		Description: "Prodajem laptop, kupljen 2019. godine, ocuvan, baterija drzi oko 3 sata. Licno preuzimanje Novi Beograd.",
+		SellerAds:   1, SellerAgeDays: 800,
+	})
+	if v.Class == ClassShop {
+		t.Fatalf("частник ошибочно срезан: %v", v.Reasons)
+	}
+}
+
+func TestL1_IgnoresBehavioralSignals(t *testing.T) {
+	// Решение 2026-08-05: число лотов и возраст аккаунта НЕ режут —
+	// детекция только по тексту описания.
+	if v := L1(AdFacts{Title: "Laptop i5", Description: "Prodajem svoj laptop.", SellerAds: 12}); v.Class == ClassShop {
+		t.Errorf("SellerAds не должен резать: %v", v.Reasons)
+	}
+	if v := L1(AdFacts{Title: "Laptop i5", Description: "Prodajem svoj laptop.", SellerAds: 4, SellerAgeDays: 20}); v.Class == ClassShop {
+		t.Errorf("молодой аккаунт не должен резать: %v", v.Reasons)
+	}
+}
+
+func TestL1_SingleMarkerNotEnough(t *testing.T) {
+	// Один маркер («garancija») ниже порога 2.0 — лот не режется.
+	v := L1(AdFacts{Title: "Laptop i5 garancija", Description: ""})
+	if v.Class == ClassShop {
+		t.Errorf("одного маркера недостаточно: %s (%v)", v.Class, v.Reasons)
+	}
+}
+
+func TestL1_DiacriticsNormalization(t *testing.T) {
+	// «saobražnost» с диакритикой и без должны ловиться одинаково.
+	for _, text := range []string{"ide zakonska saobražnost 12 meseci i garancija",
+		"ide zakonska saobraznost 12 meseci i garancija"} {
+		v := L1(AdFacts{Description: text})
+		if v.Class != ClassShop {
+			t.Errorf("диакритика %q: got %s (%v)", text, v.Class, v.Reasons)
+		}
+	}
+}
+
+// ---------- L2 ----------
+
+func TestL2_PartsOnly(t *testing.T) {
+	cases := []string{
+		"Prodajem laptop za delove, ne radi",
+		"Laptop neispravan, ekran pukao, za rezervne delove",
+		"Lenovo T450 ne pali se",
+		"HP EliteBook faulty motherboard",
+	}
+	for _, title := range cases {
+		v := L2(AdFacts{Title: title})
+		if v.Class != JunkPartsOnly {
+			t.Errorf("%q: got %s, want PARTS_ONLY", title, v.Class)
+		}
+	}
+}
+
+func TestL2_ConditionBroken(t *testing.T) {
+	v := L2(AdFacts{Condition: "broken", Title: "Laptop"})
+	if v.Class != JunkPartsOnly {
+		t.Errorf("condition=broken: got %s", v.Class)
+	}
+}
+
+func TestL2_Defect(t *testing.T) {
+	v := L2(AdFacts{Title: "ThinkPad T480", Description: "Sve radi, samo baterija ne drzi vise od 20 minuta."})
+	if v.Class != JunkDefect {
+		t.Errorf("дефект батареи: got %s (%v)", v.Class, v.Reasons)
+	}
+}
+
+func TestL2_CleanPasses(t *testing.T) {
+	v := L2(AdFacts{Title: "Lenovo ThinkPad T480 i5-8250U", Description: "Očuvan laptop, sve radi kako treba."})
+	if v.Class != JunkClean {
+		t.Errorf("чистый лот: got %s (%v)", v.Class, v.Reasons)
+	}
+}
+
+func TestL2_PriceCrossCheck(t *testing.T) {
+	// Маркер «ne radi» + цена внутри распределения (≥60% медианы) →
+	// сомнительный маркер, ручная проверка вместо тихого блока.
+	v := L2(AdFacts{Title: "Laptop ne radi", PriceEUR: 280, MedianEUR: 300})
+	if v.Class != JunkUncertain {
+		t.Errorf("кросс-чек: got %s, want BROKEN_UNCERTAIN", v.Class)
+	}
+	// Тот же маркер с ценой трупа → PARTS_ONLY.
+	v = L2(AdFacts{Title: "Laptop ne radi", PriceEUR: 50, MedianEUR: 300})
+	if v.Class != JunkPartsOnly {
+		t.Errorf("цена трупа: got %s, want PARTS_ONLY", v.Class)
+	}
+}
+
+func TestNormalize(t *testing.T) {
+	if normalize("Šta je Čašćenje") != "sta je cascenje" {
+		t.Errorf("normalize: %q", normalize("Šta je Čašćenje"))
+	}
+}
+
+// ---------- бан-лист (PLAN_v5, Фаза A) ----------
+
+func TestIsBannedModel(t *testing.T) {
+	banned := []string{"macbook"}
+	cases := []struct {
+		text    string
+		want    bool
+		wantHit string
+	}{
+		{"MacBook Air 13 M2 8GB", true, "macbook"},
+		{"APPLE MACBOOK PRO 2019 16\"", true, "macbook"},
+		{"Prodajem macbook pro, ocuvan", true, "macbook"},
+		{"Lenovo ThinkPad T480 i5-8250U", false, ""},
+		{"HP EliteBook 840 G6", false, ""},
+		{"", false, ""},
+	}
+	for _, c := range cases {
+		got, hit := IsBannedModel(c.text, banned)
+		if got != c.want || hit != c.wantHit {
+			t.Errorf("IsBannedModel(%q) = (%v, %q), хочу (%v, %q)", c.text, got, hit, c.want, c.wantHit)
+		}
+	}
+}
+
+func TestIsBannedModel_MultipleMarkers(t *testing.T) {
+	banned := []string{"macbook", "iphone"}
+	if ok, hit := IsBannedModel("iPhone 13 Pro 128GB", banned); !ok || hit != "iphone" {
+		t.Errorf("второй маркер: (%v, %q)", ok, hit)
+	}
+	// пустые/пробельные маркеры игнорируются
+	if ok, _ := IsBannedModel("Lenovo T480", []string{"", "  "}); ok {
+		t.Error("пустой маркер не должен банить")
+	}
+}

@@ -1,0 +1,123 @@
+# 📌 TECHNICAL SPECIFICATION FOR QWEN AI AGENT: KUPUJEMPRODAJEM (KP) MONITORING & VISION BOT
+
+## 1. Обзор архитектуры (System Overview)
+
+Бот на **Go (Golang)** мониторит категорию «Ноутбуки» на KupujemProdajem, фильтрует дубликаты, запрашивает расширенные данные (все фото и полное описание), передает их в **Gemini Vision** для оценки состояния и профита, после чего мгновенно отправляет уведомление пользователю.
+
+## 2. Эндпоинты KP API
+
+### 🔹 Эндпоинт №1: Быстрый поиск (Search API)
+
+Служит для получения списка 30 самых свежих объявлений.
+
+- **HTTP Method:** `GET`
+    
+- **URL:** `[https://www.kupujemprodajem.com/api/web/v1/search?order=posted+desc&page=1&firstParam=kompjuteri-laptop-i-tablet&group=laptopovi&categoryId=1221&groupId=101&attributeSummaryType=summaryShort](https://www.kupujemprodajem.com/api/web/v1/search?order=posted+desc&page=1&firstParam=kompjuteri-laptop-i-tablet&group=laptopovi&categoryId=1221&groupId=101&attributeSummaryType=summaryShort)`
+    
+- **Назначение:** Первичный перехват новых `ad_id`.
+    
+
+### 🔹 Эндпоинт №2: Детали объявления (Ad Detail API)
+
+Служит для получения полного текста объявления и массива ссылок на оригинальные фотографии высокого разрешения.
+
+- **HTTP Method:** `GET`
+    
+- **URL:** `[https://www.kupujemprodajem.com/api/web/v1/eds/](https://www.kupujemprodajem.com/api/web/v1/eds/){ad_id}`
+    
+- **Назначение:** Сбор данных для Gemini Vision AI.
+    
+
+#### Минимально необходимые HTTP Headers для обоих запросов:
+
+HTTP
+
+```
+accept: application/json, text/plain, */*
+accept-language: sr-RS,sr;q=0.9,en-US;q=0.8,en;q=0.7
+user-agent: Mozilla/5.0 (Linux; Android 15; Pixel 9) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/149.0.0.0 Mobile Safari/537.36
+x-kp-channel: mobile_web_react
+```
+
+## 3. Модели данных в Go (Data Structures)
+
+Go
+
+```
+package models
+
+// --- 1. SEARCH API MODELS ---
+type SearchResponse struct {
+	Ads []SearchAd `json:"ads"`
+}
+
+type SearchAd struct {
+	ID       int    `json:"id"`
+	Name     string `json:"name"`
+	Price    string `json:"price"`
+	Currency string `json:"currency"`
+	Location string `json:"location"`
+	AdUrl    string `json:"ad_url"`
+}
+
+// --- 2. DETAIL API MODELS (/eds/{id}) ---
+type AdDetailResponse struct {
+	ID          int        `json:"id"`
+	Name        string     `json:"name"`
+	Description string     `json:"description"` // Полный текст продавца
+	Photos      []PhotoDoc `json:"photos"`      // Все фотографии
+	Attributes  []Attribute `json:"attributes"` // Характеристики (RAM, CPU и т.д.)
+}
+
+type PhotoDoc struct {
+	Order int    `json:"order"`
+	Path  string `json:"path"` // Ссылка на изображение в высоком разрешении
+}
+
+type Attribute struct {
+	Name  string `json:"name"`
+	Value string `json:"value"`
+}
+```
+
+## 4. Пайплайн работы бота (Pipeline Steps)
+
+```
+[Poller: Search API] ──> [Filter: Postgres/Redis (New ID?)] 
+                                   │
+                                   ▼ (If New)
+                       [Fetcher: Ad Detail API (/eds/{id})]
+                                   │
+                                   ▼
+                       [AI Evaluator: Gemini Vision API]
+                         - Анализ фото (повреждения, наклейки)
+                         - Анализ текста (характеристики, дефекты)
+                                   │
+                                   ▼ (If Profitable)
+                       [Notifier: Telegram Bot / Alerting]
+                         - Ссылка, цена, краткая выжимка от AI
+```
+
+## 5. Требования к реализациям модулей (Tasks for Qwen)
+
+1. **`collector/poller.go`:**
+    
+    - Фоновый опрос Search API раз в 30–60 секунд.
+        
+    - Ротация `User-Agent` и обработка статус-кодов (особенно `429 Too Many Requests`).
+        
+2. **`storage/db.go`:**
+    
+    - Проверка `ad_id` на уникальность. Если ID уже обрабатывался — скипаем.
+        
+    - Сохранение истории найденных лотов.
+        
+3. **`vision/evaluator.go`:**
+    
+    - Формирование запроса к Gemini API: передача `Description` и первых 3–5 фотографий лота из `AdDetailResponse.Photos`.
+        
+    - Промпт для Gemini должен возвращать JSON: `{ "is_deal": bool, "estimated_profit": float, "reason": "string", "specs": "string" }`.
+        
+4. **`notifier/telegram.go`:**
+    
+    - Если `is_deal == true`, мгновенный алертинг в Telegram-чат с готовой кнопкой «Открыть объявление на KP».
