@@ -46,3 +46,33 @@ func TestFlexFloat(t *testing.T) {
 		t.Errorf("из числа: %v", f)
 	}
 }
+
+// Регрессия аудита 2026-08-06: KP присылает объект trader ВСЕМ продавцам —
+// магазинам с title «Trgovac», частникам с «Nije trgovac». Старая проверка
+// «поле присутствует» помечала магазином 100% лотов (живые сэмплы: магазин
+// Polovni Laptopovi и частники Joker/Student из tools/traderprobe).
+func TestAdDetail_TraderSemantics(t *testing.T) {
+	cases := []struct {
+		name string
+		raw  string
+		want bool
+	}{
+		{"магазин Trgovac", `{"success":true,"info":{"ad_id":1,"user":{"name":"Shop","trader":{"title":"Trgovac"}}}}`, true},
+		{"частник Nije trgovac", `{"success":true,"info":{"ad_id":2,"user":{"name":"Joker","trader":{"title":"Nije trgovac"}}}}`, false},
+		{"поля нет", `{"success":true,"info":{"ad_id":3,"user":{"name":"Pera"}}}`, false},
+		{"пустой title", `{"success":true,"info":{"ad_id":4,"user":{"name":"Pera","trader":{"title":""}}}}`, false},
+		{"регистр и пробелы", `{"success":true,"info":{"ad_id":5,"user":{"name":"Shop","trader":{"title":" trgovac "}}}}`, true},
+	}
+	for _, c := range cases {
+		var dr DetailResponse
+		if err := json.Unmarshal([]byte(c.raw), &dr); err != nil {
+			t.Fatalf("%s: разбор: %v", c.name, err)
+		}
+		if dr.Info == nil {
+			t.Fatalf("%s: пустой info", c.name)
+		}
+		if got := dr.Info.IsTrader(); got != c.want {
+			t.Errorf("%s: IsTrader()=%v, хочу %v", c.name, got, c.want)
+		}
+	}
+}

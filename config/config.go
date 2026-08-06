@@ -66,7 +66,7 @@ func Load() *Config {
 		MaxPhotos:         envInt("MAX_PHOTOS_PER_AD", 5),
 		FetchDelay:        time.Duration(envInt("FETCH_DELAY_MS", 700)) * time.Millisecond,
 		GeminiAPIKey:      os.Getenv("GEMINI_API_KEY"),
-		GeminiModel:       envStr("GEMINI_MODEL", "gemini-2.5-flash"),
+		GeminiModel:       envStr("GEMINI_MODEL", "gemini-flash-latest"),
 		GeminiConcurrency: envInt("GEMINI_CONCURRENCY", 5),
 		TelegramToken:     os.Getenv("TELEGRAM_BOT_TOKEN"),
 		TelegramChatID:    os.Getenv("TELEGRAM_CHAT_ID"),

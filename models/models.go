@@ -155,7 +155,7 @@ type AdDetail struct {
 	User        struct {
 		Name   string `json:"name"`
 		Trader *struct {
-			Title string `json:"title"` // «Trgovac» — KP сам пометил торговца
+			Title string `json:"title"` // «Trgovac» или «Nije trgovac» — объект приходит ВСЕМ
 		} `json:"trader"`
 		Reviews FlexInt `json:"reviews"` // число отзывов (KP может отдать и строкой)
 		Created string  `json:"created"` // регистрация аккаунта «2006-01-02 15:04:05»
@@ -163,7 +163,14 @@ type AdDetail struct {
 }
 
 // IsTrader — KP явно пометил продавца как торговца (магазин).
-func (d *AdDetail) IsTrader() bool { return d.User.Trader != nil }
+// ВАЖНО: объект trader KP присылает ВСЕМ продавцам — частникам с
+// title «Nije trgovac». Проверка присутствия поля (Trader != nil) давала
+// 100% ложных срабатываний (аудит 2026-08-06: is_trader=1 у всех лотов с
+// деталями, пул медиан лишился всего детального слоя). Решает только title.
+func (d *AdDetail) IsTrader() bool {
+	return d.User.Trader != nil &&
+		strings.EqualFold(strings.TrimSpace(d.User.Trader.Title), "Trgovac")
+}
 
 type PhotoDoc struct {
 	Path string `json:"path"`

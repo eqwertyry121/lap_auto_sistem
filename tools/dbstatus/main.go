@@ -52,7 +52,10 @@ func main() {
 	for rows.Next() {
 		var st string
 		var n int
-		_ = rows.Scan(&st, &n)
+		if err := rows.Scan(&st, &n); err != nil {
+			fmt.Println("статусы:", err)
+			os.Exit(1)
+		}
 		label := st
 		if label == "" {
 			label = "(пусто)"
@@ -88,22 +91,38 @@ func main() {
 
 	rows2, err := db.QueryContext(ctx,
 		`SELECT kind, COUNT(*) FROM research_ads WHERE fetch_status='OK' GROUP BY kind ORDER BY COUNT(*) DESC`)
-	if err == nil {
-		fmt.Println("  Разбивка kind:")
-		for rows2.Next() {
-			var kind string
-			var n int
-			_ = rows2.Scan(&kind, &n)
-			fmt.Printf("    %-10s %6d\n", kind, n)
+	if err != nil {
+		fmt.Println("разбивка kind:", err)
+		os.Exit(1)
+	}
+	fmt.Println("  Разбивка kind:")
+	for rows2.Next() {
+		var kind string
+		var n int
+		if err := rows2.Scan(&kind, &n); err != nil {
+			fmt.Println("разбивка kind:", err)
+			os.Exit(1)
 		}
-		rows2.Close()
+		fmt.Printf("    %-10s %6d\n", kind, n)
+	}
+	rows2.Close()
+	if err := rows2.Err(); err != nil {
+		fmt.Println("разбивка kind:", err)
+		os.Exit(1)
 	}
 
 	// Распознанное железо.
-	var specsTotal, cpuScored, gpuScored int
-	_ = db.QueryRowContext(ctx, `SELECT COUNT(*) FROM research_specs`).Scan(&specsTotal)
-	_ = db.QueryRowContext(ctx, `SELECT COUNT(*) FROM research_specs WHERE cpu_score>0`).Scan(&cpuScored)
-	_ = db.QueryRowContext(ctx, `SELECT COUNT(*) FROM research_specs WHERE gpu_score>0`).Scan(&gpuScored)
+	countOne := func(label, query string) int {
+		var n int
+		if err := db.QueryRowContext(ctx, query).Scan(&n); err != nil {
+			fmt.Printf("%s: %v\n", label, err)
+			os.Exit(1)
+		}
+		return n
+	}
+	specsTotal := countOne("research_specs: всего строк", `SELECT COUNT(*) FROM research_specs`)
+	cpuScored := countOne("research_specs: cpu_score", `SELECT COUNT(*) FROM research_specs WHERE cpu_score>0`)
+	gpuScored := countOne("research_specs: gpu_score", `SELECT COUNT(*) FROM research_specs WHERE gpu_score>0`)
 	fmt.Printf("\nРаспознанное железо (research_specs):\n")
 	fmt.Printf("  строк всего:                %6d\n", specsTotal)
 	fmt.Printf("  CPU сверен с эталоном:      %6d\n", cpuScored)
@@ -111,7 +130,7 @@ func main() {
 
 	// Цепочка фильтров обучения гедонической модели (PLAN_v4 §3.5).
 	var usedAll, usedPrivate, usedPP, usedFinal int
-	_ = db.QueryRowContext(ctx, `
+	if err := db.QueryRowContext(ctx, `
 WITH t AS (
 	SELECT a.ad_id, a.price, a.currency, a.posted, a.is_trader, a.kp_izlog,
 		COALESCE(s.cpu_score,0) AS cpu_score
@@ -119,10 +138,13 @@ WITH t AS (
 	WHERE a.fetch_status='OK' AND a.kind='USED'
 )
 SELECT COUNT(*),
-	SUM(CASE WHEN is_trader=0 AND kp_izlog=0 THEN 1 ELSE 0 END),
-	SUM(CASE WHEN is_trader=0 AND kp_izlog=0 AND price>=10 AND price<=5000 THEN 1 ELSE 0 END),
-	SUM(CASE WHEN is_trader=0 AND kp_izlog=0 AND price>=10 AND price<=5000 AND cpu_score>0 AND posted>date('now','-90 day') THEN 1 ELSE 0 END)
-FROM t`).Scan(&usedAll, &usedPrivate, &usedPP, &usedFinal)
+	COALESCE(SUM(CASE WHEN is_trader=0 AND kp_izlog=0 THEN 1 ELSE 0 END),0),
+	COALESCE(SUM(CASE WHEN is_trader=0 AND kp_izlog=0 AND price>=10 AND price<=5000 THEN 1 ELSE 0 END),0),
+	COALESCE(SUM(CASE WHEN is_trader=0 AND kp_izlog=0 AND price>=10 AND price<=5000 AND cpu_score>0 AND posted>date('now','-90 day') THEN 1 ELSE 0 END),0)
+FROM t`).Scan(&usedAll, &usedPrivate, &usedPP, &usedFinal); err != nil {
+		fmt.Println("цепочка OLS:", err)
+		os.Exit(1)
+	}
 	fmt.Printf("\nЦепочка обучения OLS (kind=USED, fetch OK):\n")
 	fmt.Printf("  всего USED:                 %6d\n", usedAll)
 	fmt.Printf("  без магазинов:              %6d\n", usedPrivate)
@@ -130,12 +152,10 @@ FROM t`).Scan(&usedAll, &usedPrivate, &usedPP, &usedFinal)
 	fmt.Printf("  + CPU и свежее 90д:         %6d\n", usedFinal)
 
 	// Реестр продавцов (Фаза 2).
-	var sellersN, sellersTraders, withUser int
-	_ = db.QueryRowContext(ctx, `SELECT COUNT(*) FROM sellers`).Scan(&sellersN)
-	_ = db.QueryRowContext(ctx,
-		`SELECT COUNT(*) FROM sellers WHERE trader_seen=1 OR kpizlog_seen=1`).Scan(&sellersTraders)
-	_ = db.QueryRowContext(ctx,
-		`SELECT COUNT(*) FROM research_ads WHERE user_id>0`).Scan(&withUser)
+	sellersN := countOne("sellers: всего", `SELECT COUNT(*) FROM sellers`)
+	sellersTraders := countOne("sellers: с метками магазина",
+		`SELECT COUNT(*) FROM sellers WHERE trader_seen=1 OR kpizlog_seen=1`)
+	withUser := countOne("research_ads: лоты с user_id", `SELECT COUNT(*) FROM research_ads WHERE user_id>0`)
 	fmt.Printf("\nРеестр продавцов: %d (из них с метками магазина: %d)\n", sellersN, sellersTraders)
 	fmt.Printf("Лотов с user_id: %d из %d (бэкфилл: go run ./cmd/research -search-refresh)\n",
 		withUser, total)
@@ -144,11 +164,24 @@ FROM t`).Scan(&usedAll, &usedPrivate, &usedPP, &usedFinal)
 	hwdb, err := sql.Open("sqlite", *hwPath)
 	if err != nil {
 		fmt.Println("\nэталон:", err)
-		return
+		os.Exit(1)
 	}
 	defer hwdb.Close()
-	var cpus, gpus int
-	_ = hwdb.QueryRowContext(ctx, `SELECT COUNT(*) FROM hw_cpu`).Scan(&cpus)
-	_ = hwdb.QueryRowContext(ctx, `SELECT COUNT(*) FROM hw_gpu`).Scan(&gpus)
+	hwdb.SetMaxOpenConns(1)
+	// hw.db раз в месяц атомарно перезаписывается cmd/hwdb — ждём, а не глотаем.
+	if _, err := hwdb.ExecContext(ctx, `PRAGMA busy_timeout=8000`); err != nil {
+		fmt.Println("эталон: busy_timeout:", err)
+		os.Exit(1)
+	}
+	countHW := func(label, query string) int {
+		var n int
+		if err := hwdb.QueryRowContext(ctx, query).Scan(&n); err != nil {
+			fmt.Printf("эталон: %s: %v\n", label, err)
+			os.Exit(1)
+		}
+		return n
+	}
+	cpus := countHW("hw_cpu", `SELECT COUNT(*) FROM hw_cpu`)
+	gpus := countHW("hw_gpu", `SELECT COUNT(*) FROM hw_gpu`)
 	fmt.Printf("\nЭталон мощности (%s): CPU %d, GPU %d\n", *hwPath, cpus, gpus)
 }
