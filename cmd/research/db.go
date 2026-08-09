@@ -166,7 +166,7 @@ func migrateResearch(db *sql.DB) error {
 		return err
 	}
 
-	// research_specs.source — кто распознал железо (regex/gemini-text/gemini-photo).
+	// research_specs.source — кто распознал железо (regex/gemini-text/gemini-photo-all).
 	specCols := map[string]bool{}
 	rows2, err := db.Query(`PRAGMA table_info(research_specs)`)
 	if err != nil {

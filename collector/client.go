@@ -103,6 +103,11 @@ func decodeError(status int, body string) error {
 	return fmt.Errorf("kp: HTTP %d: %s", status, truncate(body, 200))
 }
 
+func isChallengeBody(body []byte) bool {
+	s := string(body)
+	return strings.Contains(s, `"captchaSiteKey"`) || strings.Contains(s, `"areYouHuman"`)
+}
+
 func truncate(s string, n int) string {
 	r := []rune(s)
 	if len(r) <= n {

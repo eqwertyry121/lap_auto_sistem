@@ -346,7 +346,7 @@ KP иногда отвечает на /eds/ кодом 200 с ПУСТЫМ info 
 - `kp_bot.db` — рабочая БД бота (SSOT): лоты, вердикты, статусы.
 - `research.db` — датасет рынка: `research_ads` (24 700 лотов; каркас 100%,
   детали SEARCH → OK, ~1035 OK), `research_specs` (железо + колонка
-  `source`: regex/gemini-text/gemini-photo), `sellers` (реестр продавцов),
+  `source`: regex/gemini-text/gemini-photo-all), `sellers` (реестр продавцов),
   `labels` (золотая выборка), `kv` (курс и настройки).
 - `hw.db` — эталон мощности: `hw_cpu` (4 239), `hw_gpu` (874).
 - `research.csv` — выгрузка датасета (`go run ./cmd/research -dump-only`).

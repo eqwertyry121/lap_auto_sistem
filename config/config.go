@@ -12,7 +12,6 @@ import (
 type Config struct {
 	PollInterval time.Duration
 	DBPath       string
-	MaxPhotos    int
 	FetchDelay   time.Duration
 
 	GeminiAPIKey      string
@@ -70,7 +69,6 @@ func Load() *Config {
 	return &Config{
 		PollInterval:      envDurationSec("POLL_INTERVAL_SEC", 45),
 		DBPath:            envStr("DB_PATH", "data/kp_bot.db"),
-		MaxPhotos:         envInt("MAX_PHOTOS_PER_AD", 5),
 		FetchDelay:        time.Duration(envInt("FETCH_DELAY_MS", 700)) * time.Millisecond,
 		GeminiAPIKey:      os.Getenv("GEMINI_API_KEY"),
 		GeminiModel:       baseGeminiModel,

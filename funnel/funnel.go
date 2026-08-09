@@ -300,11 +300,14 @@ func Run(ctx context.Context, f *Funnel, cfg *config.Config, gem *vision.GeminiC
 
 	// Накопление сведений из Gemini-ступеней: модель ноутбука, причина
 	// нераспознанного CPU, явная встройка (ТЗ: фото → максимум информации).
-	laptopModel, whyNoCPU := "", ""
+	laptopModel, whyNoCPU := specs.ExtractLaptopModel(ad.Name+" "+descPlain), ""
+	if laptopModel != "" {
+		tr.f("L3.1 regex: модель ноутбука из текста: %s", laptopModel)
+	}
 	integratedGPU := false
 	via := "regex"
 	merge := func(stage, viaName string, gs specs.GeminiSpecs) {
-		if gs.LaptopModel != "" && laptopModel == "" {
+		if gs.LaptopModel != "" && (laptopModel == "" || len(gs.LaptopModel) > len(laptopModel)) {
 			laptopModel = gs.LaptopModel
 			tr.f("%s: модель ноутбука: %s", stage, laptopModel)
 		}
@@ -353,14 +356,36 @@ func Run(ctx context.Context, f *Funnel, cfg *config.Config, gem *vision.GeminiC
 	// лот в CHECK/RARE_NO_MARKET без баллов.
 	var cachedText, cachedPhoto, cachedSearch bool
 	if gs, source, ok := loadCachedGeminiSpecs(ctx, cfg.ResearchDBPath, ad.AdID); ok {
-		tr.f("L3.cache: найден research_specs source=%s — Gemini для этой ступени не повторяем", source)
+		tr.f("L3.cache: найден research_specs source=%s — использую как начальные спеки", source)
 		merge("L3.cache", source, gs)
 		cachedText = strings.HasPrefix(source, "gemini-")
-		cachedPhoto = strings.HasPrefix(source, "gemini-photo") || strings.HasPrefix(source, "gemini-search")
+		cachedPhoto = strings.HasPrefix(source, "gemini-photo-all")
 		cachedSearch = strings.HasPrefix(source, "gemini-search")
 	}
 	missing := func() bool {
 		return cpuModel == "" || (cfg.RequireDGPU && gpuModel == "" && !integratedGPU)
+	}
+	searchedModelThisRun := false
+	researchModelSpecs := func() {
+		if !cfg.WebResearch || laptopModel == "" || !missing() || cachedSearch || searchedModelThisRun {
+			return
+		}
+		searchedModelThisRun = true
+		bump("L3_INTERNET_SPECS")
+		bump("L3_4_INTERNET_SPECS")
+		tr.f("L3.4 интернет-спеки (%s): модель %q известна, но CPU/GPU не хватает — ищу в интернете", cfg.GeminiSearchModel, laptopModel)
+		gs, prompt, raw, err := vision.ModelSpecsResearch(ctx, gem.WithModel(cfg.GeminiSearchModel), laptopModel, ad.Name, "")
+		tr.f("L3.4 запрос (промпт): %s", traceTrunc(prompt, 300))
+		if err != nil {
+			tr.f("L3.4 ошибка: %v", err)
+			log.Warn("воронка: интернет-спеки", "ad_id", ad.AdID, "err", err)
+			return
+		}
+		tr.f("L3.4 ответ Gemini (как пришёл): %s", traceTrunc(raw, 400))
+		merge("L3.4", "internet", gs)
+		if err := saveCachedGeminiSpecs(ctx, cfg.ResearchDBPath, ad.AdID, "gemini-search", gs, cpus, gpus); err != nil {
+			log.Warn("воронка: cache gemini-search specs", "ad_id", ad.AdID, "err", err)
+		}
 	}
 
 	if missing() && !cachedText {
@@ -380,52 +405,36 @@ func Run(ctx context.Context, f *Funnel, cfg *config.Config, gem *vision.GeminiC
 			}
 		}
 	}
+	researchModelSpecs()
 	if missing() && len(detail.Photos) > 0 && !cachedPhoto {
-		tr.f("L3.3 Gemini-фото (%s): текста не хватило — отправляю %d фото", cfg.GeminiVisionModel, minInt(cfg.MaxPhotos, len(detail.Photos)))
+		tr.f("L3.3 Gemini-фото (%s): текста не хватило — отправляю все %d фото", cfg.GeminiVisionModel, len(detail.Photos))
 		for i, ph := range detail.Photos {
-			if i >= cfg.MaxPhotos {
-				break
-			}
-			tr.f("L3.3 фото %d: %s", i+1, ph.BestURL())
+			tr.f("L3.3 фото %d/%d: %s", i+1, len(detail.Photos), ph.BestURL())
 		}
-		gs, note, raw, err := geminiPhotoSpecs(ctx, gem.WithModel(cfg.GeminiVisionModel), ad.Name, descPlain, detail.Photos, cfg.MaxPhotos)
+		gs, note, raw, err := geminiPhotoSpecs(ctx, gem.WithModel(cfg.GeminiVisionModel), ad.Name, descPlain, detail.Photos)
 		bump("L3_GEMINI_PHOTO")
 		bump("L3_3_GEMINI_PHOTO")
 		tr.f("L3.3 запрос Gemini (текстовая часть): %s", traceTrunc(note, 300))
 		if err != nil {
 			tr.f("L3.3 ошибка Gemini: %v", err)
-			log.Warn("воронка: gemini-photo", "ad_id", ad.AdID, "err", err)
+			log.Warn("воронка: gemini-photo-all", "ad_id", ad.AdID, "err", err)
 		} else {
 			tr.f("L3.3 ответ Gemini (как пришёл): %s", traceTrunc(raw, 400))
-			merge("L3.3", "gemini-photo", gs)
-			if err := saveCachedGeminiSpecs(ctx, cfg.ResearchDBPath, ad.AdID, "gemini-photo", gs, cpus, gpus); err != nil {
-				log.Warn("воронка: cache gemini-photo specs", "ad_id", ad.AdID, "err", err)
+			merge("L3.3", "gemini-photo-all", gs)
+			if err := saveCachedGeminiSpecs(ctx, cfg.ResearchDBPath, ad.AdID, "gemini-photo-all", gs, cpus, gpus); err != nil {
+				log.Warn("воронка: cache gemini-photo-all specs", "ad_id", ad.AdID, "err", err)
 			}
 		}
 	} else if missing() && len(detail.Photos) == 0 {
 		tr.f("L3.3: фото у лота нет — ступень Gemini-фото пропущена")
 	}
+	researchModelSpecs()
 
 	// ---- L3.4: интернет «модель→железо» (PLAN_v5, Фаза C). Модель ноутбука
 	// известна, но CPU или GPU не определены — ищем спеки модели в сети.
 	// Найденное валидируется merge'ом по hw.db (нет балла — не принято).
-	if cfg.WebResearch && laptopModel != "" && missing() && !cachedSearch {
-		bump("L3_INTERNET_SPECS")
-		bump("L3_4_INTERNET_SPECS")
-		tr.f("L3.4 интернет-спеки (%s): модель %q известна, но CPU/GPU не хватает — ищу в интернете", cfg.GeminiSearchModel, laptopModel)
-		gs, prompt, raw, err := vision.ModelSpecsResearch(ctx, gem.WithModel(cfg.GeminiSearchModel), laptopModel, ad.Name, "")
-		tr.f("L3.4 запрос (промпт): %s", traceTrunc(prompt, 300))
-		if err != nil {
-			tr.f("L3.4 ошибка: %v", err)
-			log.Warn("воронка: интернет-спеки", "ad_id", ad.AdID, "err", err)
-		} else {
-			tr.f("L3.4 ответ Gemini (как пришёл): %s", traceTrunc(raw, 400))
-			merge("L3.4", "internet", gs)
-			if err := saveCachedGeminiSpecs(ctx, cfg.ResearchDBPath, ad.AdID, "gemini-search", gs, cpus, gpus); err != nil {
-				log.Warn("воронка: cache gemini-search specs", "ad_id", ad.AdID, "err", err)
-			}
-		}
-	}
+	// Вызывается через researchModelSpecs(): сначала до Vision, потом после
+	// Vision, если фото добавило модель, но всё ещё не дало точный CPU/GPU.
 
 	specsLine := buildSpecsLine(laptopModel, cpuModel, recognized.RAMGB, recognized.SSDGB, gpuModel, integratedGPU)
 	tr.f("L3 итог: конфигурация = %s (источник: %s)", specsLine, via)
@@ -441,7 +450,11 @@ func Run(ctx context.Context, f *Funnel, cfg *config.Config, gem *vision.GeminiC
 		bump("L3_MANUAL")
 		reason := strings.TrimSpace(whyNoCPU)
 		if reason == "" {
-			reason = "зацепок для определения модели не нашлось"
+			if laptopModel != "" {
+				reason = "модель найдена (" + laptopModel + "), но точный CPU не определён"
+			} else {
+				reason = "зацепок для определения модели не нашлось"
+			}
 		}
 		if manualAlertWorthy(priceEUR, cfg.ManualMinEUR) {
 			bump("MANUAL_ALERT")
@@ -671,13 +684,6 @@ func traceTrunc(s string, n int) string {
 	return truncateRunes(s, n)
 }
 
-func minInt(a, b int) int {
-	if a < b {
-		return a
-	}
-	return b
-}
-
 func matchCPU(cpus map[string]hw.CPU, name string) (string, float64) {
 	if name == "" || cpus == nil {
 		return name, 0
@@ -794,19 +800,15 @@ func geminiTextSpecs(ctx context.Context, gem *vision.GeminiClient, title, descP
 	return gs, prompt, out, perr
 }
 
-func geminiPhotoSpecs(ctx context.Context, gem *vision.GeminiClient, title, descPlain string, photos []models.PhotoDoc, maxPhotos int) (specs.GeminiSpecs, string, string, error) {
+func geminiPhotoSpecs(ctx context.Context, gem *vision.GeminiClient, title, descPlain string, photos []models.PhotoDoc) (specs.GeminiSpecs, string, string, error) {
 	note := fmt.Sprintf(
-		"Заголовок: %s\nОписание: %s\n\nМодель не удалось определить по тексту. Внимательно рассмотри наклейки процессора, шильдики на дне и гравировки модели на фото.",
+		"Заголовок: %s\nОписание: %s\n\nМодель не удалось определить по тексту. Внимательно рассмотри наклейки процессора, шильдики на дне, гравировки модели и скриншоты характеристик, которые часто лежат в конце галереи.",
 		title, truncateRunes(descPlain, 800))
 	parts := []vision.Part{{Text: note}}
-	limit := maxPhotos
-	if limit > len(photos) {
-		limit = len(photos)
-	}
 	var mu sync.Mutex
 	var wg sync.WaitGroup
-	for i := 0; i < limit; i++ {
-		u := photos[i].BestURL()
+	for _, ph := range photos {
+		u := ph.BestURL()
 		if u == "" {
 			continue
 		}

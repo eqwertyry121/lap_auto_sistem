@@ -42,6 +42,9 @@ func (c *Client) SearchPageFull(ctx context.Context, page int) (*models.SearchRe
 	if err != nil {
 		return nil, fmt.Errorf("kp search: чтение тела: %w", err)
 	}
+	if isChallengeBody(body) {
+		return nil, ErrChallenge
+	}
 	if resp.StatusCode != http.StatusOK {
 		return nil, decodeError(resp.StatusCode, string(body))
 	}

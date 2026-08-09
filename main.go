@@ -85,7 +85,7 @@ func main() {
 	priceCache.Refresh(ctx)
 
 	gemini := vision.NewGeminiClient(cfg.GeminiAPIKey, cfg.GeminiModel).SetLimits(cfg.GeminiConcurrency, cfg.GeminiDailyLimit)
-	evaluator := vision.NewEvaluator(gemini, cfg.GeminiConcurrency, cfg.MaxPhotos)
+	evaluator := vision.NewEvaluator(gemini, cfg.GeminiConcurrency)
 	tg := notifier.NewWithQueue(cfg.TelegramToken, cfg.TelegramChatID, cfg.AlertQueuePath)
 	kp := collector.NewClient()
 
@@ -183,7 +183,6 @@ func main() {
 		"gemini_text_model", cfg.GeminiTextModel,
 		"gemini_vision_model", cfg.GeminiVisionModel,
 		"gemini_search_model", cfg.GeminiSearchModel,
-		"max_photos", cfg.MaxPhotos,
 		"heartbeat", cfg.HeartbeatPath,
 		"challenge_pause", cfg.ChallengePause.String(),
 		"funnel_shadow", cfg.FunnelShadow,

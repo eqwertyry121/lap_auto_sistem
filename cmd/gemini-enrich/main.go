@@ -170,6 +170,9 @@ ORDER BY CASE upper(a.currency)
 func askGemini(ctx context.Context, gem *vision.GeminiClient, c candidate) (geminiSpecs, error) {
 	var b strings.Builder
 	fmt.Fprintf(&b, "Заголовок: %s\n", c.Title)
+	if model := specs.ExtractLaptopModel(c.Title + " " + stripHTML(c.Desc)); model != "" {
+		fmt.Fprintf(&b, "Модель из текста: %s\n", model)
+	}
 	fmt.Fprintf(&b, "Описание: %s\n", truncateStr(stripHTML(c.Desc), 2500))
 	if c.AttrsJSON != "" && c.AttrsJSON != "[]" {
 		fmt.Fprintf(&b, "Атрибуты объявления: %s\n", truncateStr(c.AttrsJSON, 500))

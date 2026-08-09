@@ -28,6 +28,20 @@ func TestExtractCPU(t *testing.T) {
 	}
 }
 
+func TestExtractLaptopModel(t *testing.T) {
+	cases := []struct{ text, want string }{
+		{"Lenovo ThinkPad E14 Gen 6 – Ryzen 7 / 16GB / 512GB", "Lenovo ThinkPad E14 Gen 6"},
+		{"The Lenovo ThinkPad E14 Gen 6 (21M3003PCX) is a 14-inch laptop", "Lenovo ThinkPad E14 Gen 6 21M3003PCX"},
+		{"LENOVO ThinkPad E14 G6 Ryzen 7 7735HS 16GB 512GB", "Lenovo ThinkPad E14 Gen 6"},
+		{"Lenovo IdeaPad Ryzen 7 / 16GB / 512GB", ""},
+	}
+	for _, c := range cases {
+		if got := ExtractLaptopModel(c.text); got != c.want {
+			t.Errorf("ExtractLaptopModel(%q) = %q, хочу %q", c.text, got, c.want)
+		}
+	}
+}
+
 func TestExtractGPU(t *testing.T) {
 	cases := []struct{ text, want string }{
 		{"Acer Predator Helios Neo 16 i7-13700HX/32GB DDR5/1TB/RTX4060", "RTX 4060"},
@@ -64,6 +78,7 @@ func TestExtractMemory(t *testing.T) {
 		{"HP EliteBook 630 G9 i5-1235U 16GB 256GB SSD +GARANCIJA", 16, 256},
 		{"DELL Alienware 16X Aurora – Ultra 9 / 32GB RAM", 32, 0},
 		{"Radni laptop i5/16gb/SSD +GARANCIJA", 16, 0},
+		{"Lenovo ThinkPad E14 Gen 6 – Ryzen 7 / 16GB / 512GB", 16, 512},
 		{"SSD 512GB nov, laptop", 0, 512},
 		{"Laptop 15.6\" FHD", 0, 0},
 	}

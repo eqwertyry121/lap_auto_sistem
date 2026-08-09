@@ -33,7 +33,7 @@ Go-бот 24/7 мониторит новые объявления ноутбук
 4. **Fetcher** — `GET /api/web/v1/eds/{ad_id}` (описание, HD-фото, атрибуты) **только для новых** ID + пауза `FETCH_DELAY_MS` между запросами.
 5. **Оценка Gemini** (worker pool ≤ `GEMINI_CONCURRENCY=5`):
    - **Фаза 1 (текст):** заголовок + описание + атрибуты + рыночная сводка из кэша цен.
-   - **Фаза 2 (vision):** если `model_found=false` — до `MAX_PHOTOS_PER_AD=5` фото (наклейки, шильдики, гравировки).
+   - **Фаза 2 (vision):** если `model_found=false` — все фото объявления (наклейки, шильдики, гравировки, скриншоты характеристик в конце галереи).
 6. **Вердикт:**
    - `is_deal=true` → статус `ALERTED` + **ALERT** в Telegram;
    - `need_check=true` → статус `NEED_CHECK` + **NEED CHECK** в Telegram;
@@ -125,7 +125,6 @@ SQLite — только на MVP: запросы написаны так, что
 |---|---|---|
 | `POLL_INTERVAL_SEC` | 45 | интервал опроса Search API |
 | `DB_PATH` | `data/kp_bot.db` | файл SQLite |
-| `MAX_PHOTOS_PER_AD` | 5 | фото для Vision |
 | `FETCH_DELAY_MS` | 700 | пауза между `/eds/` |
 | `GEMINI_API_KEY` | — | ключ Gemini (обязателен для анализа) |
 | `GEMINI_MODEL` | `gemini-2.5-flash` | модель |

@@ -27,6 +27,9 @@ var (
 	ultraRe = regexp.MustCompile(`(?i)\b(?:core\s+)?ultra\s?([579])\s?(?:processor\s+)?(\d{3}[a-z]{0,4}(?:\s?plus)?)\b`)
 	// AMD: «Ryzen 5 4600H», «Ryzen 7 5800U»
 	ryzenRe = regexp.MustCompile(`(?i)\bryzen\s?([3579])\s?(\d{4}[a-z]{0,3})\b`)
+
+	thinkPadGenRe = regexp.MustCompile(`(?i)\b(?:lenovo\s+)?thinkpad\s+([a-z]\d{1,3}s?)\s*(?:gen(?:eration)?|g)\s*([0-9]{1,2})\b`)
+	lenovoMTMRe   = regexp.MustCompile(`(?i)\b(2[0-9a-z]{9})\b`)
 )
 
 // ExtractCPU возвращает нормализованную модель CPU из произвольного текста.
@@ -41,6 +44,30 @@ func ExtractCPU(text string) string {
 	}
 	if m := ryzenRe.FindStringSubmatch(text); m != nil {
 		return "Ryzen " + m[1] + " " + strings.ToUpper(m[2])
+	}
+	return ""
+}
+
+// ExtractLaptopModel возвращает явную модель ноутбука из текста, если она
+// написана достаточно конкретно для model→specs поиска. CPU по такой модели
+// не угадывается локально: это только hint для L3.4/Gemini.
+func ExtractLaptopModel(text string) string {
+	if m := thinkPadGenRe.FindStringSubmatch(text); m != nil {
+		model := "Lenovo ThinkPad " + strings.ToUpper(m[1]) + " Gen " + m[2]
+		if code := lenovoMTM(text); code != "" {
+			model += " " + code
+		}
+		return model
+	}
+	if code := lenovoMTM(text); code != "" && strings.Contains(strings.ToLower(text), "lenovo") {
+		return "Lenovo " + code
+	}
+	return ""
+}
+
+func lenovoMTM(text string) string {
+	if m := lenovoMTMRe.FindStringSubmatch(text); m != nil {
+		return strings.ToUpper(m[1])
 	}
 	return ""
 }
@@ -73,6 +100,12 @@ func ExtractMemory(text string) (ramGB, ssdGB int) {
 		switch {
 		case val >= 64 && (storageRe.MatchString(after) || storageBefore.MatchString(before)):
 			// 64+ GB рядом с ssd/nvme — накопитель (16gb/SSD — это память + диск без объёма)
+			if ssdGB == 0 {
+				ssdGB = val
+			}
+		case val >= 128 && ramGB > 0:
+			// KP-заголовки часто пишут компактно: CPU / 16GB / 512GB.
+			// После уже найденной RAM крупный объём без контекста — накопитель.
 			if ssdGB == 0 {
 				ssdGB = val
 			}

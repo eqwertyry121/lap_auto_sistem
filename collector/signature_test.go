@@ -27,3 +27,13 @@ func TestKpSignatureEds(t *testing.T) {
 		t.Fatalf("signature mismatch:\n got %q\nwant %q", got, want)
 	}
 }
+
+func TestIsChallengeBody(t *testing.T) {
+	body := []byte(`{"success":true,"info":{"captcha":"areYouHuman","captchaSiteKey":"site-key"}}`)
+	if !isChallengeBody(body) {
+		t.Fatal("captcha response must be recognized as challenge")
+	}
+	if isChallengeBody([]byte(`{"success":true,"info":{"name":"Lenovo ThinkPad"}}`)) {
+		t.Fatal("normal detail response must not be challenge")
+	}
+}

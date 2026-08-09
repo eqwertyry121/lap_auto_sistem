@@ -34,22 +34,17 @@ const systemPrompt = `Ты — опытный перекупщик ноутбу�
 
 // Evaluator — двухфазная оценка лота: текст → (при необходимости) фото.
 type Evaluator struct {
-	gemini    *GeminiClient
-	sem       chan struct{} // семафор параллельных оценок
-	maxPhotos int
+	gemini *GeminiClient
+	sem    chan struct{} // семафор параллельных оценок
 }
 
-func NewEvaluator(gemini *GeminiClient, concurrency, maxPhotos int) *Evaluator {
+func NewEvaluator(gemini *GeminiClient, concurrency int) *Evaluator {
 	if concurrency <= 0 {
 		concurrency = 5
 	}
-	if maxPhotos <= 0 {
-		maxPhotos = 5
-	}
 	return &Evaluator{
-		gemini:    gemini,
-		sem:       make(chan struct{}, concurrency),
-		maxPhotos: maxPhotos,
+		gemini: gemini,
+		sem:    make(chan struct{}, concurrency),
 	}
 }
 
@@ -136,12 +131,8 @@ func (e *Evaluator) Evaluate(ctx context.Context, l models.Listing, d *models.Ad
 	var mu sync.Mutex
 	var wg sync.WaitGroup
 	var imgParts []Part
-	limit := e.maxPhotos
-	if limit > len(d.Photos) {
-		limit = len(d.Photos)
-	}
-	for i := 0; i < limit; i++ {
-		u := d.Photos[i].BestURL()
+	for _, ph := range d.Photos {
+		u := ph.BestURL()
 		if u == "" {
 			continue
 		}

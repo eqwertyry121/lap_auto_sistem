@@ -25,6 +25,9 @@ func (c *Client) FetchDetail(ctx context.Context, adID int64) (*models.AdDetail,
 	if err != nil {
 		return nil, fmt.Errorf("kp eds: чтение тела: %w", err)
 	}
+	if isChallengeBody(body) {
+		return nil, ErrChallenge
+	}
 	if resp.StatusCode != http.StatusOK {
 		return nil, decodeError(resp.StatusCode, string(body))
 	}
