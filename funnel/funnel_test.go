@@ -92,8 +92,41 @@ func TestDecideL5DominatedDiamond(t *testing.T) {
 		DevOK: true, Dev: -0.20, N: 10, Dominated: true,
 		diamondDev: -0.15, suspectDev: -0.40, marketTol: 0.05, minN: 5,
 	}
-	if got := decideL5(in); got != vcCheck {
-		t.Fatalf("dominated diamond got %s, want CHECK", got)
+	if got := decideL5(in); got != vcOutclassed {
+		t.Fatalf("dominated diamond got %s, want OUTCLASSED", got)
+	}
+}
+
+func TestDecideL5StepUpOutclassedDiamond(t *testing.T) {
+	in := l5Input{
+		JunkClass: filters.JunkClean, CPUName: "i7-10510U", CPUScore: 4100,
+		DevOK: true, Dev: -0.28, N: 1152, StepUpOutclassed: true,
+		diamondDev: -0.15, suspectDev: -0.40, marketTol: 0.05, minN: 5,
+	}
+	if got := decideL5(in); got != vcOutclassed {
+		t.Fatalf("step-up outclassed diamond got %s, want OUTCLASSED", got)
+	}
+}
+
+func TestStepUpOutclassesLatitude3510Case(t *testing.T) {
+	target := pricing.Lot{
+		Price: 200, CPUScore: 4100, GPUScore: 4125,
+	}
+	step := pricing.Lot{
+		AdID: 210, Title: "Lenovo Y520", URL: "https://example.test/lenovo-y520",
+		Price: 210, CPUScore: 10000, GPUScore: 14947,
+	}
+	if !stepUpOutclasses(target, &step) {
+		t.Fatal("Latitude 3510 alert must be suppressed: +€10 gives +203% composite score")
+	}
+
+	normalStep := pricing.Lot{
+		AdID: 550, Title: "Normal step", URL: "https://example.test/normal",
+		Price: 550, CPUScore: 30000, GPUScore: 30000,
+	}
+	normalTarget := pricing.Lot{Price: 500, CPUScore: 25000, GPUScore: 25000}
+	if stepUpOutclasses(normalTarget, &normalStep) {
+		t.Fatal("ordinary +10% price / +20% power step-up must stay informational")
 	}
 }
 

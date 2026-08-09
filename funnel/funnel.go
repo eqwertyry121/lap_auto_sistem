@@ -28,19 +28,27 @@ import (
 
 // Коды вердиктов (PLAN_v4 §3.6 + PLAN_v5).
 const (
-	vcDiamond   = "DIAMOND"
-	vcSuspect   = "DIAMOND_SUSPECT"
-	vcFair      = "FAIR"
-	vcExpensive = "EXPENSIVE"
-	vcCheck     = "CHECK"
-	vcManual    = "MANUAL"
-	vcShop      = "SHOP"
-	vcJunk      = "JUNK"
-	vcSanity    = "SANITY"
-	vcNoMarket  = "NO_MARKET"
-	vcBanMac    = "BAN_MAC"        // PLAN_v5: запрещённая линейка (MacBook)
-	vcNoGpu     = "NO_GPU"         // PLAN_v5: нет дискретной видеокарты
-	vcMoose     = "RARE_NO_MARKET" // железо добыто, но в данных KP не с чем сравнить
+	vcDiamond    = "DIAMOND"
+	vcSuspect    = "DIAMOND_SUSPECT"
+	vcFair       = "FAIR"
+	vcExpensive  = "EXPENSIVE"
+	vcCheck      = "CHECK"
+	vcManual     = "MANUAL"
+	vcShop       = "SHOP"
+	vcJunk       = "JUNK"
+	vcSanity     = "SANITY"
+	vcNoMarket   = "NO_MARKET"
+	vcOutclassed = "OUTCLASSED"
+	vcBanMac     = "BAN_MAC"        // PLAN_v5: запрещённая линейка (MacBook)
+	vcNoGpu      = "NO_GPU"         // PLAN_v5: нет дискретной видеокарты
+	vcMoose      = "RARE_NO_MARKET" // железо добыто, но в данных KP не с чем сравнить
+)
+
+const (
+	stepUpClosePricePct    = 0.10
+	stepUpClosePriceAbsEUR = 20.0
+	stepUpValueRatioMin    = 1.25
+	stepUpPowerGainMin     = 0.50
 )
 
 // Funnel — рыночная модель + эталон железа под блокировкой чтения.
@@ -129,24 +137,25 @@ func decideL0(priceEUR float64, exchange bool, titleSnip string) (bool, string) 
 
 // l5Input — факты для вердикта (без БД/сети — только числа и классы).
 type l5Input struct {
-	JunkClass   string  // CLEAN / DEFECT / BROKEN_UNCERTAIN
-	CPUName     string  // имя CPU (даже без балла); пусто = не определён
-	CPUScore    float64 // 0 = CPU вне эталона hw.db
-	DevOK       bool
-	Dev         float64
-	N           int
-	Dominated   bool
-	YoungSeller bool    // аккаунт < 30 дней
-	diamondDev  float64 // отрицательные пороги (например −0.15 / −0.40)
-	suspectDev  float64
-	marketTol   float64 // «рыночная цена»: отклонение ≤ +marketTol
-	minN        int
+	JunkClass        string  // CLEAN / DEFECT / BROKEN_UNCERTAIN
+	CPUName          string  // имя CPU (даже без балла); пусто = не определён
+	CPUScore         float64 // 0 = CPU вне эталона hw.db
+	DevOK            bool
+	Dev              float64
+	N                int
+	Dominated        bool
+	StepUpOutclassed bool
+	YoungSeller      bool    // аккаунт < 30 дней
+	diamondDev       float64 // отрицательные пороги (например −0.15 / −0.40)
+	suspectDev       float64
+	marketTol        float64 // «рыночная цена»: отклонение ≤ +marketTol
+	minN             int
 }
 
 // decideL5 — детерминированный вердикт (PLAN_v6/v7: «лучшие из лучших по низу
-// рынка», цены ТОЛЬКО из данных KP). Гейт «есть мощнее за те деньги» УБРАН —
-// он отсекал весь низ рынка цепочкой 300→310→320. «Шаг вверх» показывается в
-// алерте цифрами и ничего не отклоняет. Некритичный дефект = «нюанс».
+// рынка», цены ТОЛЬКО из данных KP). Обычный «шаг вверх» показывается в алерте,
+// но явно лучший value-step переводит лот в тихий OUTCLASSED. Некритичный дефект
+// = «нюанс».
 func decideL5(in l5Input) string {
 	// Сомнительный хлам → ручная проверка. Некритичный дефект (DEFECT) —
 	// не блок, а «нюанс» в алерте, поэтому здесь только UNCERTAIN.
@@ -156,6 +165,12 @@ func decideL5(in l5Input) string {
 	if in.CPUName == "" {
 		return vcManual // CPU реально не определён — «нужно посмотреть»
 	}
+	if in.CPUScore <= 0 {
+		return vcCheck // медиана есть, но CPU вне эталона — проверить
+	}
+	if in.Dominated || in.StepUpOutclassed {
+		return vcOutclassed
+	}
 	if !in.DevOK {
 		// Железо опознано, но в НАШИХ данных KP нет группы для сравнения
 		// (новое/редкое железо). Не молчим — шлём сводку «Владелец лось».
@@ -163,13 +178,6 @@ func decideL5(in l5Input) string {
 	}
 	if in.Dev > in.marketTol {
 		return vcExpensive // дороже рынка — не интересно
-	}
-	if in.CPUScore <= 0 {
-		return vcCheck // медиана есть, но CPU вне эталона — проверить
-	}
-	// Цена в низу рынка.
-	if in.Dominated && in.Dev <= in.diamondDev {
-		return vcCheck
 	}
 	if in.Dev < in.suspectDev {
 		return vcSuspect // слишком дёшево — возможна приманка
@@ -197,6 +205,28 @@ func manualAlertWorthy(priceEUR float64, minEUR int) bool {
 // железо без рыночной группы — шум, дешевле minEUR пишем только в аудит.
 func mooseAlertWorthy(priceEUR float64, minEUR int) bool {
 	return priceEUR >= float64(minEUR)
+}
+
+func stepUpOutclasses(target pricing.Lot, step *pricing.Lot) bool {
+	if step == nil || step.URL == "" || target.Price <= 0 || step.Price <= target.Price {
+		return false
+	}
+	targetComp := target.Composite()
+	stepComp := step.Composite()
+	if targetComp <= 0 || stepComp <= targetComp || target.ValuePer1000() <= 0 {
+		return false
+	}
+	dPrice := step.Price - target.Price
+	maxClosePrice := target.Price * stepUpClosePricePct
+	if maxClosePrice < stepUpClosePriceAbsEUR {
+		maxClosePrice = stepUpClosePriceAbsEUR
+	}
+	if dPrice > maxClosePrice {
+		return false
+	}
+	powerGain := (stepComp - targetComp) / targetComp
+	valueRatio := step.ValuePer1000() / target.ValuePer1000()
+	return powerGain >= stepUpPowerGainMin || valueRatio >= stepUpValueRatioMin
 }
 
 // ---------- полный прогон лота ----------
@@ -533,13 +563,21 @@ func Run(ctx context.Context, f *Funnel, cfg *config.Config, gem *vision.GeminiC
 	// Никаких внешних цен через Gemini — интернет используется только чтобы
 	// узнать, ЧТО за ноутбук (L3.4 модель→железо), а не сколько он стоит.
 	// «Шаг вверх» — ближайший смысловой апгрейд: мощнее в целом (CPU+GPU) И
-	// дороже, с минимальной ценой за прирост мощности. Показывается в алерте
-	// цифрами и НИЧЕГО не отклоняет (гейт «мощнее за те же деньги» убран —
-	// он отсекал весь низ рынка цепочкой 300→310→320).
+	// дороже, с минимальной ценой за прирост мощности. Обычный шаг показывается
+	// в алерте; явно лучший value-step гасит алмаз как OUTCLASSED.
 	stepUp := eval.StepUp
+	stepUpOutclassed := stepUpOutclasses(lot, stepUp)
+	outclassReason := ""
 	if stepUp != nil && stepUp.URL != "" {
 		tr.f("L5 шаг вверх: %q €%.0f (+€%.0f, +%.0f баллов) %s", stepUp.Title, stepUp.Price,
 			stepUp.Price-lot.Price, stepUp.Composite()-lot.Composite(), stepUp.URL)
+		if stepUpOutclassed {
+			dComp := stepUp.Composite() - lot.Composite()
+			dPrice := stepUp.Price - lot.Price
+			outclassReason = fmt.Sprintf("step_up_outclasses=lot %d €%.0f (+€%.0f), %.0f баллов (+%.0f, +%.0f%%), value %.0f vs %.0f баллов/€1000, %s",
+				stepUp.AdID, stepUp.Price, dPrice, stepUp.Composite(), dComp, dComp/lot.Composite()*100, stepUp.ValuePer1000(), lot.ValuePer1000(), stepUp.URL)
+			tr.f("L5 анти-алмаз: %s", outclassReason)
+		}
 	} else {
 		tr.f("L5 шаг вверх: мощнее и дороже на рынке не найдено")
 	}
@@ -552,12 +590,13 @@ func Run(ctx context.Context, f *Funnel, cfg *config.Config, gem *vision.GeminiC
 
 	code := decideL5(l5Input{
 		JunkClass: junk.Class, CPUName: cpuModel, CPUScore: cpuScore, DevOK: devOK, Dev: dev, N: est.N,
-		Dominated:   eval.DominatedBy != nil,
-		YoungSeller: seller.AgeDays() >= 0 && seller.AgeDays() < 30,
-		diamondDev:  float64(cfg.DiamondDevPct) / 100,
-		suspectDev:  float64(cfg.SuspectDevPct) / 100,
-		marketTol:   float64(cfg.MarketTolPct) / 100,
-		minN:        cfg.DiamondMinN,
+		Dominated:        eval.DominatedBy != nil,
+		StepUpOutclassed: stepUpOutclassed,
+		YoungSeller:      seller.AgeDays() >= 0 && seller.AgeDays() < 30,
+		diamondDev:       float64(cfg.DiamondDevPct) / 100,
+		suspectDev:       float64(cfg.SuspectDevPct) / 100,
+		marketTol:        float64(cfg.MarketTolPct) / 100,
+		minN:             cfg.DiamondMinN,
 	})
 	tr.f("L5: вердикт %s (рынок ≤ +%d%%, алмаз ≤ %d%%, подозрение < %d%%, мин. n=%d)",
 		code, cfg.MarketTolPct, cfg.DiamondDevPct, cfg.SuspectDevPct, cfg.DiamondMinN)
@@ -583,6 +622,13 @@ func Run(ctx context.Context, f *Funnel, cfg *config.Config, gem *vision.GeminiC
 			marketRef += fmt.Sprintf("; opportunity_ceiling=€%.0f by stronger lot %d %s",
 				eval.OpportunityCeiling, ceilingBy.AdID, ceilingBy.URL)
 		}
+	}
+	if outclassReason == "" && eval.DominatedBy != nil {
+		outclassReason = fmt.Sprintf("dominated_by=lot %d €%.0f, %.0f баллов, %s",
+			eval.DominatedBy.AdID, eval.DominatedBy.Price, eval.DominatedBy.Composite(), eval.DominatedBy.URL)
+	}
+	if outclassReason != "" {
+		marketRef += "; " + outclassReason
 	}
 	audit := storage.FunnelVerdict{
 		Code: code, Deviation: dev, GroupN: est.N, Alternatives: string(altsJSON),
