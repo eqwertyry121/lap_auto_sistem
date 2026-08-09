@@ -1,6 +1,7 @@
 package pricing
 
 import (
+	"fmt"
 	"math"
 	"testing"
 	"time"
@@ -84,6 +85,7 @@ func marketWith(t *testing.T, lots []Lot, windowDays int) *Market {
 func mkLot(adID int64, cpu string, score float64, ram, ssd int, price float64, daysAgo int) Lot {
 	return Lot{
 		AdID: adID, Title: "t", Price: price, Kind: "USED",
+		URL:      fmt.Sprintf("https://kp.test/%d", adID),
 		CPUModel: cpu, CPUScore: score, RAMGB: ram, SSDGB: ssd,
 		Posted: time.Now().AddDate(0, 0, -daysAgo),
 	}
@@ -353,7 +355,7 @@ func TestDeviationLeaveOneOutDropsLevel(t *testing.T) {
 	}
 }
 
-func TestCompetitiveCapPreventsWeakLaptopOverpricing(t *testing.T) {
+func TestEvaluateSeparatesComparableMedianAndOpportunityCeiling(t *testing.T) {
 	var lots []Lot
 	for i := 0; i < 8; i++ {
 		lots = append(lots, mkLot(int64(i+1), "i5-old", 3000, 8, 256, 250, 1))
@@ -366,21 +368,54 @@ func TestCompetitiveCapPreventsWeakLaptopOverpricing(t *testing.T) {
 	m := marketWith(t, lots, 60)
 	target := mkLot(999, "i5-old", 3000, 8, 256, 100, 0)
 
+	ev := m.Evaluate(target)
+	if ev.ComparableMedian != 250 {
+		t.Fatalf("ComparableMedian = %.0f, want 250", ev.ComparableMedian)
+	}
+	if ev.OpportunityCeiling != 110 {
+		t.Fatalf("OpportunityCeiling = %.0f, want 110", ev.OpportunityCeiling)
+	}
+	if ev.DominatedBy == nil || ev.DominatedBy.AdID != 51 {
+		t.Fatalf("DominatedBy must be private stronger lot 51, got %+v", ev.DominatedBy)
+	}
+
 	est := m.EstimateFor(target)
-	if !est.Capped() {
+	if est.Capped() {
 		t.Fatalf("ожидал конкурентный потолок, получил %+v", est)
 	}
-	if est.RawMedian != 250 || est.Median != 110 {
+	if est.RawMedian != 250 || est.Median != 250 {
 		t.Fatalf("оценка = raw %.0f / median %.0f, жду 250 / 110", est.RawMedian, est.Median)
 	}
-	if est.CapLot == nil || est.CapLot.AdID != 51 {
+	if est.CapLot != nil {
 		t.Fatalf("потолок должен поставить частный более мощный лот 51, got %+v", est.CapLot)
 	}
 
 	dev, ok := m.Deviation(target)
-	want := 100.0/110.0 - 1
+	want := 100.0/250.0 - 1
 	if !ok || math.Abs(dev-want) > 1e-9 {
 		t.Fatalf("dev=%.4f ok=%v, жду %.4f", dev, ok, want)
+	}
+}
+
+func TestOpportunityCeilingDoesNotImplyDominance(t *testing.T) {
+	var lots []Lot
+	for i := 0; i < 8; i++ {
+		lots = append(lots, mkLot(int64(i+1), "i5-old", 3000, 8, 256, 250, 1))
+	}
+	lots = append(lots, mkLot(51, "i7-new", 12000, 8, 256, 180, 1))
+
+	m := marketWith(t, lots, 60)
+	target := mkLot(999, "i5-old", 3000, 8, 256, 100, 0)
+
+	ev := m.Evaluate(target)
+	if ev.OpportunityCeiling != 180 {
+		t.Fatalf("OpportunityCeiling = %.0f, want 180", ev.OpportunityCeiling)
+	}
+	if ev.OpportunityBy == nil || ev.OpportunityBy.AdID != 51 {
+		t.Fatalf("OpportunityBy = %+v, want lot 51", ev.OpportunityBy)
+	}
+	if ev.DominatedBy != nil {
+		t.Fatalf("DominatedBy = %+v, want nil because stronger lot is outside +10%%/+20€", ev.DominatedBy)
 	}
 }
 
@@ -441,6 +476,27 @@ func TestStatsPoolDGPUOnly(t *testing.T) {
 	pool := dgpu.Pool()
 	if len(pool) != 1 || pool[0].AdID != 1 {
 		t.Errorf("dGPU-пул = %v, жду только лот 1", pool)
+	}
+}
+
+func TestStatsPoolRequiresUsedAndURL(t *testing.T) {
+	ok := mkLot(1, "i5-1135G7", 10000, 16, 512, 300, 5)
+	noURL := mkLot(2, "i5-1135G7", 10000, 16, 512, 300, 5)
+	noURL.URL = ""
+	newLot := mkLot(3, "i5-1135G7", 10000, 16, 512, 300, 5)
+	newLot.Kind = "NEW"
+	unknown := mkLot(4, "i5-1135G7", 10000, 16, 512, 300, 5)
+	unknown.Kind = "UNKNOWN"
+	search := mkLot(5, "i5-1135G7", 10000, 16, 512, 300, 5)
+	search.Kind = "SEARCH"
+	cheap := mkLot(6, "i5-1135G7", 10000, 16, 512, 9, 5)
+	parts := mkLot(7, "i5-8265U", 10000, 16, 512, 80, 5)
+	parts.Title = "Matična ploča Asus VivoBook S15 X530F"
+
+	m := marketWith(t, []Lot{ok, noURL, newLot, unknown, search, cheap, parts}, 60)
+	pool := m.Pool()
+	if len(pool) != 1 || pool[0].AdID != 1 {
+		t.Fatalf("pool = %+v, want only USED lot with URL and sane price", pool)
 	}
 }
 
@@ -537,6 +593,37 @@ func TestBestStepUp(t *testing.T) {
 	// а не лот 2 (+10 баллов за +€1).
 	if steps[0].AdID != 3 {
 		t.Errorf("первый шаг = лот %d, жду лот 3 (выгоднейший прирост)", steps[0].AdID)
+	}
+}
+
+func TestBestStepUpRequiresURL(t *testing.T) {
+	target := mkLotFull(1, 6871, 47062, 550, 1)
+	noURL := mkLotFull(2, 6871, 48062, 551, 1)
+	noURL.URL = ""
+	withURL := mkLotFull(3, 6871, 49062, 552, 1)
+	m := marketWithDGPU(t, []Lot{target, noURL, withURL}, 60)
+
+	steps := m.BestStepUp(target, 60, 1)
+	if len(steps) != 1 || steps[0].AdID != 3 {
+		t.Fatalf("steps = %+v, want only URL-backed step-up 3", steps)
+	}
+	ev := m.Evaluate(target)
+	if ev.StepUp == nil || ev.StepUp.AdID != 3 {
+		t.Fatalf("Evaluate.StepUp = %+v, want lot 3", ev.StepUp)
+	}
+}
+
+func TestAcer194438629NoStepUpWithoutURL(t *testing.T) {
+	target := mkLotFull(194438629, 6871, 47062, 200, 1)
+	noURL := mkLotFull(194288556, 6871, 48062, 210, 1)
+	noURL.URL = ""
+	m := marketWithDGPU(t, []Lot{target, noURL}, 60)
+
+	if steps := m.BestStepUp(target, 60, 1); len(steps) != 0 {
+		t.Fatalf("steps = %+v, want no step-up without URL", steps)
+	}
+	if ev := m.Evaluate(target); ev.StepUp != nil {
+		t.Fatalf("Evaluate.StepUp = %+v, want nil without URL", ev.StepUp)
 	}
 }
 

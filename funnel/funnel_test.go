@@ -86,6 +86,17 @@ func TestDecideL5(t *testing.T) {
 	}
 }
 
+func TestDecideL5DominatedDiamond(t *testing.T) {
+	in := l5Input{
+		JunkClass: filters.JunkClean, CPUName: "i5-1135G7", CPUScore: 10000,
+		DevOK: true, Dev: -0.20, N: 10, Dominated: true,
+		diamondDev: -0.15, suspectDev: -0.40, marketTol: 0.05, minN: 5,
+	}
+	if got := decideL5(in); got != vcCheck {
+		t.Fatalf("dominated diamond got %s, want CHECK", got)
+	}
+}
+
 func TestManualAlertWorthy(t *testing.T) {
 	cases := []struct {
 		price  float64

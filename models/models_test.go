@@ -32,18 +32,24 @@ func TestAdDetail_ReviewsFlex(t *testing.T) {
 }
 
 func TestFlexFloat(t *testing.T) {
-	var f FlexFloat
-	if err := json.Unmarshal([]byte(`"1.299,00"`), &f); err != nil {
-		t.Fatalf("строка: %v", err)
+	cases := []struct {
+		raw  string
+		want float64
+	}{
+		{`"1.299,00"`, 1299},
+		{`"2 500"`, 2500},
+		{`"€220"`, 220},
+		{`"1,299.00"`, 1299},
+		{`250`, 250},
 	}
-	if float64(f) != 1.299 {
-		t.Errorf("из строки: %v", f)
-	}
-	if err := json.Unmarshal([]byte(`250`), &f); err != nil {
-		t.Fatalf("число: %v", err)
-	}
-	if float64(f) != 250 {
-		t.Errorf("из числа: %v", f)
+	for _, c := range cases {
+		var f FlexFloat
+		if err := json.Unmarshal([]byte(c.raw), &f); err != nil {
+			t.Fatalf("%s: %v", c.raw, err)
+		}
+		if float64(f) != c.want {
+			t.Errorf("%s: got %v, want %v", c.raw, f, c.want)
+		}
 	}
 }
 

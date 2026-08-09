@@ -6,6 +6,7 @@ package funnel
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
 	"fmt"
 	"html"
@@ -134,6 +135,7 @@ type l5Input struct {
 	DevOK       bool
 	Dev         float64
 	N           int
+	Dominated   bool
 	YoungSeller bool    // аккаунт < 30 дней
 	diamondDev  float64 // отрицательные пороги (например −0.15 / −0.40)
 	suspectDev  float64
@@ -166,6 +168,9 @@ func decideL5(in l5Input) string {
 		return vcCheck // медиана есть, но CPU вне эталона — проверить
 	}
 	// Цена в низу рынка.
+	if in.Dominated && in.Dev <= in.diamondDev {
+		return vcCheck
+	}
 	if in.Dev < in.suspectDev {
 		return vcSuspect // слишком дёшево — возможна приманка
 	}
@@ -346,14 +351,23 @@ func Run(ctx context.Context, f *Funnel, cfg *config.Config, gem *vision.GeminiC
 	// дискретной GPU. CPU, который regex уже назвал, но которого ещё нет в
 	// hw.db, не является поводом жечь Gemini: L5 умеет честно отправить такой
 	// лот в CHECK/RARE_NO_MARKET без баллов.
+	var cachedText, cachedPhoto, cachedSearch bool
+	if gs, source, ok := loadCachedGeminiSpecs(ctx, cfg.ResearchDBPath, ad.AdID); ok {
+		tr.f("L3.cache: найден research_specs source=%s — Gemini для этой ступени не повторяем", source)
+		merge("L3.cache", source, gs)
+		cachedText = strings.HasPrefix(source, "gemini-")
+		cachedPhoto = strings.HasPrefix(source, "gemini-photo") || strings.HasPrefix(source, "gemini-search")
+		cachedSearch = strings.HasPrefix(source, "gemini-search")
+	}
 	missing := func() bool {
 		return cpuModel == "" || (cfg.RequireDGPU && gpuModel == "" && !integratedGPU)
 	}
 
-	if missing() {
+	if missing() && !cachedText {
 		tr.f("L3.2 Gemini-текст (%s): regex не дал CPU или GPU — спрашиваю Gemini", cfg.GeminiTextModel)
 		gs, prompt, raw, err := geminiTextSpecs(ctx, gem.WithModel(cfg.GeminiTextModel), ad.Name, descPlain, detail.Attributes)
 		bump("L3_GEMINI_TEXT")
+		bump("L3_2_GEMINI_TEXT")
 		tr.f("L3.2 запрос Gemini (промпт): %s", traceTrunc(prompt, 700))
 		if err != nil {
 			tr.f("L3.2 ошибка Gemini: %v", err)
@@ -361,9 +375,12 @@ func Run(ctx context.Context, f *Funnel, cfg *config.Config, gem *vision.GeminiC
 		} else {
 			tr.f("L3.2 ответ Gemini (как пришёл): %s", traceTrunc(raw, 400))
 			merge("L3.2", "gemini-text", gs)
+			if err := saveCachedGeminiSpecs(ctx, cfg.ResearchDBPath, ad.AdID, "gemini-text", gs, cpus, gpus); err != nil {
+				log.Warn("воронка: cache gemini-text specs", "ad_id", ad.AdID, "err", err)
+			}
 		}
 	}
-	if missing() && len(detail.Photos) > 0 {
+	if missing() && len(detail.Photos) > 0 && !cachedPhoto {
 		tr.f("L3.3 Gemini-фото (%s): текста не хватило — отправляю %d фото", cfg.GeminiVisionModel, minInt(cfg.MaxPhotos, len(detail.Photos)))
 		for i, ph := range detail.Photos {
 			if i >= cfg.MaxPhotos {
@@ -373,6 +390,7 @@ func Run(ctx context.Context, f *Funnel, cfg *config.Config, gem *vision.GeminiC
 		}
 		gs, note, raw, err := geminiPhotoSpecs(ctx, gem.WithModel(cfg.GeminiVisionModel), ad.Name, descPlain, detail.Photos, cfg.MaxPhotos)
 		bump("L3_GEMINI_PHOTO")
+		bump("L3_3_GEMINI_PHOTO")
 		tr.f("L3.3 запрос Gemini (текстовая часть): %s", traceTrunc(note, 300))
 		if err != nil {
 			tr.f("L3.3 ошибка Gemini: %v", err)
@@ -380,6 +398,9 @@ func Run(ctx context.Context, f *Funnel, cfg *config.Config, gem *vision.GeminiC
 		} else {
 			tr.f("L3.3 ответ Gemini (как пришёл): %s", traceTrunc(raw, 400))
 			merge("L3.3", "gemini-photo", gs)
+			if err := saveCachedGeminiSpecs(ctx, cfg.ResearchDBPath, ad.AdID, "gemini-photo", gs, cpus, gpus); err != nil {
+				log.Warn("воронка: cache gemini-photo specs", "ad_id", ad.AdID, "err", err)
+			}
 		}
 	} else if missing() && len(detail.Photos) == 0 {
 		tr.f("L3.3: фото у лота нет — ступень Gemini-фото пропущена")
@@ -388,8 +409,9 @@ func Run(ctx context.Context, f *Funnel, cfg *config.Config, gem *vision.GeminiC
 	// ---- L3.4: интернет «модель→железо» (PLAN_v5, Фаза C). Модель ноутбука
 	// известна, но CPU или GPU не определены — ищем спеки модели в сети.
 	// Найденное валидируется merge'ом по hw.db (нет балла — не принято).
-	if cfg.WebResearch && laptopModel != "" && missing() {
+	if cfg.WebResearch && laptopModel != "" && missing() && !cachedSearch {
 		bump("L3_INTERNET_SPECS")
+		bump("L3_4_INTERNET_SPECS")
 		tr.f("L3.4 интернет-спеки (%s): модель %q известна, но CPU/GPU не хватает — ищу в интернете", cfg.GeminiSearchModel, laptopModel)
 		gs, prompt, raw, err := vision.ModelSpecsResearch(ctx, gem.WithModel(cfg.GeminiSearchModel), laptopModel, ad.Name, "")
 		tr.f("L3.4 запрос (промпт): %s", traceTrunc(prompt, 300))
@@ -399,6 +421,9 @@ func Run(ctx context.Context, f *Funnel, cfg *config.Config, gem *vision.GeminiC
 		} else {
 			tr.f("L3.4 ответ Gemini (как пришёл): %s", traceTrunc(raw, 400))
 			merge("L3.4", "internet", gs)
+			if err := saveCachedGeminiSpecs(ctx, cfg.ResearchDBPath, ad.AdID, "gemini-search", gs, cpus, gpus); err != nil {
+				log.Warn("воронка: cache gemini-search specs", "ad_id", ad.AdID, "err", err)
+			}
 		}
 	}
 
@@ -468,8 +493,21 @@ func Run(ctx context.Context, f *Funnel, cfg *config.Config, gem *vision.GeminiC
 		Kind: "USED", CPUModel: cpuModel, CPUScore: cpuScore,
 		RAMGB: recognized.RAMGB, SSDGB: recognized.SSDGB, GPUModel: gpuModel, GPUScore: gpuScore,
 	}
-	est := market.EstimateFor(lot)
-	dev, devOK := market.Deviation(lot)
+	eval := market.Evaluate(lot)
+	est := eval.Estimate
+	dev, devOK := eval.Deviation, eval.DevOK
+	facts.PriceEUR = priceEUR
+	facts.MedianEUR = eval.ComparableMedian
+	if lateJunk := filters.L2(facts); lateJunk.Class != junk.Class || strings.Join(lateJunk.Reasons, "; ") != strings.Join(junk.Reasons, "; ") {
+		junk = lateJunk
+		tr.f("L2 late price-aware: %s — %s", junk.Class, strings.Join(junk.Reasons, "; "))
+	}
+	if junk.Class == filters.JunkPartsOnly {
+		bump("L2_JUNK_LATE")
+		tr.f("L2 late: ХЛАМ/запчасти после price-aware cross-check → итог JUNK (тихо)")
+		flush()
+		return silent(vcJunk, strings.Join(junk.Reasons, "; "))
+	}
 	if devOK {
 		tr.f("L4: медиана конфигурации %.0f€ (n=%d, уровень %s) · цена лота %.0f€ · отклонение %+.0f%%",
 			est.Median, est.N, est.Level, priceEUR, dev*100)
@@ -485,12 +523,8 @@ func Run(ctx context.Context, f *Funnel, cfg *config.Config, gem *vision.GeminiC
 	// дороже, с минимальной ценой за прирост мощности. Показывается в алерте
 	// цифрами и НИЧЕГО не отклоняет (гейт «мощнее за те же деньги» убран —
 	// он отсекал весь низ рынка цепочкой 300→310→320).
-	stepUps := market.BestStepUp(lot, 60, 1)
-	var stepUp *pricing.Lot
-	if len(stepUps) > 0 {
-		stepUp = &stepUps[0]
-	}
-	if stepUp != nil {
+	stepUp := eval.StepUp
+	if stepUp != nil && stepUp.URL != "" {
 		tr.f("L5 шаг вверх: %q €%.0f (+€%.0f, +%.0f баллов) %s", stepUp.Title, stepUp.Price,
 			stepUp.Price-lot.Price, stepUp.Composite()-lot.Composite(), stepUp.URL)
 	} else {
@@ -505,6 +539,7 @@ func Run(ctx context.Context, f *Funnel, cfg *config.Config, gem *vision.GeminiC
 
 	code := decideL5(l5Input{
 		JunkClass: junk.Class, CPUName: cpuModel, CPUScore: cpuScore, DevOK: devOK, Dev: dev, N: est.N,
+		Dominated:   eval.DominatedBy != nil,
 		YoungSeller: seller.AgeDays() >= 0 && seller.AgeDays() < 30,
 		diamondDev:  float64(cfg.DiamondDevPct) / 100,
 		suspectDev:  float64(cfg.SuspectDevPct) / 100,
@@ -524,6 +559,18 @@ func Run(ctx context.Context, f *Funnel, cfg *config.Config, gem *vision.GeminiC
 				est.Median, est.RawMedian, est.CapLot.AdID)
 		}
 	}
+	if devOK {
+		marketRef = fmt.Sprintf("comparable_median=€%.0f p25=€%.0f (n=%d, %s, confidence=%s)",
+			eval.ComparableMedian, eval.ComparableP25, est.N, est.Level, eval.Confidence)
+		ceilingBy := eval.OpportunityBy
+		if ceilingBy == nil {
+			ceilingBy = eval.DominatedBy
+		}
+		if eval.OpportunityCeiling > 0 && ceilingBy != nil {
+			marketRef += fmt.Sprintf("; opportunity_ceiling=€%.0f by stronger lot %d %s",
+				eval.OpportunityCeiling, ceilingBy.AdID, ceilingBy.URL)
+		}
+	}
 	audit := storage.FunnelVerdict{
 		Code: code, Deviation: dev, GroupN: est.N, Alternatives: string(altsJSON),
 		Reason: fmt.Sprintf("L3=%s; L2=%s; %s", via, junk.Class, marketRef),
@@ -537,7 +584,7 @@ func Run(ctx context.Context, f *Funnel, cfg *config.Config, gem *vision.GeminiC
 		bump(code)
 		tr.f("ИТОГ: %s — АЛЕРТ в Telegram", code)
 		flush()
-		text := valueAlertText(code, ad, specsScore, lot, est, dev, nuance, stepUp)
+		text := valueAlertText(code, ad, specsScore, lot, est, dev, nuance, stepUp, eval)
 		return Outcome{Code: code, Status: models.StatusAlerted, AlertText: text, AlertURL: ad.URL(), Audit: audit}
 	case vcMoose:
 		bump(code)
@@ -555,7 +602,7 @@ func Run(ctx context.Context, f *Funnel, cfg *config.Config, gem *vision.GeminiC
 		bump("CHECK")
 		tr.f("ИТОГ: CHECK — алерт «проверка» в Telegram")
 		flush()
-		text := checkAlertText(ad, priceEUR, specsScore, est, devOK, dev, junk.Reasons, cpuScore <= 0, nuance)
+		text := checkAlertText(ad, priceEUR, specsScore, est, devOK, dev, junk.Reasons, cpuScore <= 0, nuance, eval)
 		return Outcome{Code: code, Status: models.StatusNeedCheck, AlertText: text, AlertURL: ad.URL(), Audit: audit}
 	default:
 		bump(code)
@@ -680,6 +727,51 @@ func buildSpecsLine(laptop, cpu string, ram, ssd int, gpu string, integratedGPU 
 // Каждая ступень возвращает (спеки, отправленный запрос, сырой ответ, ошибка) —
 // всё это попадает в трассировку, чтобы любой вызов можно было проследить.
 
+func loadCachedGeminiSpecs(ctx context.Context, dbPath string, adID int64) (specs.GeminiSpecs, string, bool) {
+	db, err := sql.Open("sqlite", dbPath)
+	if err != nil {
+		return specs.GeminiSpecs{}, "", false
+	}
+	defer db.Close()
+	db.SetMaxOpenConns(1)
+	_, _ = db.ExecContext(ctx, `PRAGMA busy_timeout=5000`)
+	var gs specs.GeminiSpecs
+	var source string
+	err = db.QueryRowContext(ctx, `
+SELECT COALESCE(cpu_model,''), COALESCE(ram_gb,0), COALESCE(ssd_gb,0), COALESCE(gpu_model,''), COALESCE(source,'')
+FROM research_specs
+WHERE ad_id=? AND source LIKE 'gemini%'
+LIMIT 1`, adID).Scan(&gs.CPU, &gs.RAMGB, &gs.SSDGB, &gs.GPU, &source)
+	if err != nil {
+		return specs.GeminiSpecs{}, "", false
+	}
+	return gs, source, true
+}
+
+func saveCachedGeminiSpecs(ctx context.Context, dbPath string, adID int64, source string, gs specs.GeminiSpecs,
+	cpus map[string]hw.CPU, gpus map[string]hw.GPU) error {
+	db, err := sql.Open("sqlite", dbPath)
+	if err != nil {
+		return err
+	}
+	defer db.Close()
+	db.SetMaxOpenConns(1)
+	_, _ = db.ExecContext(ctx, `PRAGMA busy_timeout=5000`)
+
+	cpuModel, cpuScore := matchCPU(cpus, strings.TrimSpace(gs.CPU))
+	gpuModel, gpuScore := matchGPU(gpus, strings.TrimSpace(gs.GPU))
+	_, err = db.ExecContext(ctx, `
+INSERT INTO research_specs (ad_id, cpu_model, cpu_score, ram_gb, ssd_gb, gpu_model, gpu_score, updated_at, source)
+VALUES (?,?,?,?,?,?,?,?,?)
+ON CONFLICT(ad_id) DO UPDATE SET
+	cpu_model=excluded.cpu_model, cpu_score=excluded.cpu_score,
+	ram_gb=excluded.ram_gb, ssd_gb=excluded.ssd_gb,
+	gpu_model=excluded.gpu_model, gpu_score=excluded.gpu_score,
+	updated_at=excluded.updated_at, source=excluded.source`,
+		adID, cpuModel, cpuScore, gs.RAMGB, gs.SSDGB, gpuModel, gpuScore, time.Now().Unix(), source)
+	return err
+}
+
 func geminiTextSpecs(ctx context.Context, gem *vision.GeminiClient, title, descPlain string, attrs []models.Attribute) (specs.GeminiSpecs, string, string, error) {
 	var b strings.Builder
 	fmt.Fprintf(&b, "Заголовок: %s\n", title)
@@ -802,7 +894,7 @@ func specsScoreLine(laptop, cpu string, cpuScore float64, ram, ssd int, gpu stri
 // (НАШИ данные KP), баллы кандидата, «шаг вверх» (ближайший мощнее и дороже)
 // и сколько он стоит за единицу мощности.
 func valueAlertText(code string, ad models.SearchAd, specsScore string, lot pricing.Lot,
-	est pricing.PriceEstimate, dev float64, nuance string, stepUp *pricing.Lot) string {
+	est pricing.PriceEstimate, dev float64, nuance string, stepUp *pricing.Lot, eval pricing.MarketEvaluation) string {
 	var b strings.Builder
 	switch code {
 	case vcSuspect:
@@ -814,24 +906,31 @@ func valueAlertText(code string, ad models.SearchAd, specsScore string, lot pric
 	fmt.Fprintf(&b, "Железо: %s\n", html.EscapeString(specsScore))
 	fmt.Fprintf(&b, "Мощность: %.0f баллов · %.0f баллов/€1000\n", lot.Composite(), lot.ValuePer1000())
 	fmt.Fprintf(&b, "Цена: <b>€%.0f</b>\n", lot.Price)
-	if est.Capped() && est.CapLot != nil {
+	if est.Capped() && est.CapLot != nil && est.CapLot.URL != "" {
 		fmt.Fprintf(&b, "Рыночный ориентир: €%.0f (сырая медиана €%.0f, n=%d; потолок по более мощному лоту)\n",
 			est.Median, est.RawMedian, est.N)
 		fmt.Fprintf(&b, "Контраргумент: %s · €%.0f · %.0f баллов\n",
 			html.EscapeString(truncateRunes(est.CapLot.Title, 80)), est.CapLot.Price, est.CapLot.Composite())
-		if est.CapLot.URL != "" {
-			fmt.Fprintf(&b, "↪ %s\n", html.EscapeString(est.CapLot.URL))
-		}
+		fmt.Fprintf(&b, "↪ %s\n", html.EscapeString(est.CapLot.URL))
 		fmt.Fprintf(&b, "Отклонение: <b>%.0f%%</b>\n", dev*100)
 	} else {
 		fmt.Fprintf(&b, "Рыночный ориентир (наши данные KP): €%.0f (n=%d) · отклонение <b>%.0f%%</b>\n",
 			est.Median, est.N, dev*100)
 	}
+	ceilingBy := eval.OpportunityBy
+	if ceilingBy == nil {
+		ceilingBy = eval.DominatedBy
+	}
+	if eval.OpportunityCeiling > 0 && ceilingBy != nil && ceilingBy.URL != "" {
+		fmt.Fprintf(&b, "Opportunity ceiling: €%.0f by stronger lot %s · €%.0f · %.0f points\n",
+			eval.OpportunityCeiling, html.EscapeString(truncateRunes(ceilingBy.Title, 80)), ceilingBy.Price, ceilingBy.Composite())
+		fmt.Fprintf(&b, "↪ %s\n", html.EscapeString(ceilingBy.URL))
+	}
 	if nuance != "" {
 		fmt.Fprintf(&b, "✅ Хороший, но с нюансом: %s\n", html.EscapeString(nuance))
 	}
 	// Шаг вверх: ближайший мощнее И дороже — цифрами (цена за прирост мощности).
-	if stepUp != nil {
+	if stepUp != nil && stepUp.URL != "" {
 		dComp := stepUp.Composite() - lot.Composite()
 		dPrice := stepUp.Price - lot.Price
 		costPer1000 := dPrice / dComp * 1000
@@ -877,22 +976,29 @@ func mooseAlertText(ad models.SearchAd, specsScore string, lot pricing.Lot, nuan
 
 func checkAlertText(ad models.SearchAd, priceEUR float64, specsScore string,
 	est pricing.PriceEstimate, devOK bool, dev float64, junkReasons []string,
-	cpuNoScore bool, nuance string) string {
+	cpuNoScore bool, nuance string, eval pricing.MarketEvaluation) string {
 	var b strings.Builder
 	b.WriteString("⚠️ <b>ТРЕБУЕТСЯ ПРОВЕРКА</b>\n\n")
 	fmt.Fprintf(&b, "<b>%s</b>\n", html.EscapeString(truncateRunes(ad.Name, 90)))
 	fmt.Fprintf(&b, "Железо: %s\n", html.EscapeString(specsScore))
 	fmt.Fprintf(&b, "Цена: €%.0f\n", priceEUR)
+	ceilingBy := eval.OpportunityBy
+	if ceilingBy == nil {
+		ceilingBy = eval.DominatedBy
+	}
+	if eval.OpportunityCeiling > 0 && ceilingBy != nil && ceilingBy.URL != "" {
+		fmt.Fprintf(&b, "Opportunity ceiling: €%.0f by stronger lot %s · €%.0f · %.0f points\n",
+			eval.OpportunityCeiling, html.EscapeString(truncateRunes(ceilingBy.Title, 80)), ceilingBy.Price, ceilingBy.Composite())
+		fmt.Fprintf(&b, "↪ %s\n", html.EscapeString(ceilingBy.URL))
+	}
 	if cpuNoScore {
 		b.WriteString("ℹ️ CPU нет в эталоне мощности: сверь поколение сам.\n")
 	}
 	if devOK {
-		if est.Capped() && est.CapLot != nil {
+		if est.Capped() && est.CapLot != nil && est.CapLot.URL != "" {
 			fmt.Fprintf(&b, "Рыночный ориентир: €%.0f (сырая медиана €%.0f, n=%d; потолок по более мощному лоту), отклонение %.0f%%\n",
 				est.Median, est.RawMedian, est.N, dev*100)
-			if est.CapLot.URL != "" {
-				fmt.Fprintf(&b, "Контраргумент: %s\n", html.EscapeString(est.CapLot.URL))
-			}
+			fmt.Fprintf(&b, "Контраргумент: %s\n", html.EscapeString(est.CapLot.URL))
 		} else {
 			fmt.Fprintf(&b, "Рыночный ориентир (наши данные KP): €%.0f (n=%d), отклонение %.0f%%\n", est.Median, est.N, dev*100)
 		}

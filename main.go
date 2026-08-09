@@ -84,7 +84,7 @@ func main() {
 	priceCache := storage.NewPriceCache(store, cfg.PriceCacheDays)
 	priceCache.Refresh(ctx)
 
-	gemini := vision.NewGeminiClient(cfg.GeminiAPIKey, cfg.GeminiModel)
+	gemini := vision.NewGeminiClient(cfg.GeminiAPIKey, cfg.GeminiModel).SetLimits(cfg.GeminiConcurrency, cfg.GeminiDailyLimit)
 	evaluator := vision.NewEvaluator(gemini, cfg.GeminiConcurrency, cfg.MaxPhotos)
 	tg := notifier.NewWithQueue(cfg.TelegramToken, cfg.TelegramChatID, cfg.AlertQueuePath)
 	kp := collector.NewClient()
@@ -178,6 +178,7 @@ func main() {
 	log.Info("бот запущен",
 		"poll_interval", cfg.PollInterval.String(),
 		"gemini_concurrency", cfg.GeminiConcurrency,
+		"gemini_daily_limit", cfg.GeminiDailyLimit,
 		"gemini_model", cfg.GeminiModel,
 		"gemini_text_model", cfg.GeminiTextModel,
 		"gemini_vision_model", cfg.GeminiVisionModel,
@@ -448,8 +449,8 @@ func pollOnce(ctx context.Context, kp *collector.Client, store *storage.Store, c
 			// ТЕНЬ: воронка решает параллельно и пишет только аудит;
 			// алерты идут по старому Gemini-пути (сравнение вердиктов).
 			go func(ad models.SearchAd, detail *models.AdDetail) {
-				out := funnel.Run(context.Background(), fnl, cfg, gem, log, ad, detail)
-				if err := store.SaveFunnelAudit(context.Background(), ad.AdID, out.Audit); err != nil {
+				out := funnel.Run(ctx, fnl, cfg, gem, log, ad, detail)
+				if err := store.SaveFunnelAudit(ctx, ad.AdID, out.Audit); err != nil {
 					log.Warn("воронка (тень): аудит", "ad_id", ad.AdID, "err", err)
 				}
 			}(ad, detail)

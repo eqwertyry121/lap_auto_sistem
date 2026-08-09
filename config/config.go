@@ -21,6 +21,7 @@ type Config struct {
 	GeminiVisionModel string
 	GeminiSearchModel string
 	GeminiConcurrency int
+	GeminiDailyLimit  int
 
 	TelegramToken  string
 	TelegramChatID string
@@ -77,6 +78,7 @@ func Load() *Config {
 		GeminiVisionModel: envStr("GEMINI_VISION_MODEL", liteGeminiModel),
 		GeminiSearchModel: envStr("GEMINI_SEARCH_MODEL", liteGeminiModel),
 		GeminiConcurrency: envInt("GEMINI_CONCURRENCY", 5),
+		GeminiDailyLimit:  envInt("GEMINI_DAILY_LIMIT", 0),
 		TelegramToken:     os.Getenv("TELEGRAM_BOT_TOKEN"),
 		TelegramChatID:    os.Getenv("TELEGRAM_CHAT_ID"),
 		CSVPath:           envStr("CSV_PATH", "data/market_history.csv"),

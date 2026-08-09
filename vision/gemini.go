@@ -8,14 +8,24 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"sync"
 	"time"
 )
 
 // GeminiClient — минимальный REST-клиент Gemini (generateContent), без SDK.
 type GeminiClient struct {
-	apiKey string
-	model  string
-	http   *http.Client
+	apiKey  string
+	model   string
+	http    *http.Client
+	limiter *geminiLimiter
+}
+
+type geminiLimiter struct {
+	sem        chan struct{}
+	dailyLimit int
+	mu         sync.Mutex
+	day        string
+	calls      int
 }
 
 func NewGeminiClient(apiKey, model string) *GeminiClient {
@@ -30,6 +40,22 @@ func NewGeminiClient(apiKey, model string) *GeminiClient {
 }
 
 func (g *GeminiClient) Model() string { return g.model }
+
+func (g *GeminiClient) SetLimits(concurrency, dailyLimit int) *GeminiClient {
+	if g == nil {
+		return nil
+	}
+	if concurrency <= 0 && dailyLimit <= 0 {
+		g.limiter = nil
+		return g
+	}
+	lim := &geminiLimiter{dailyLimit: dailyLimit}
+	if concurrency > 0 {
+		lim.sem = make(chan struct{}, concurrency)
+	}
+	g.limiter = lim
+	return g
+}
 
 // WithModel возвращает лёгкую копию клиента с другой моделью и тем же
 // HTTP-клиентом. Это позволяет дешёвым L3-ступеням использовать Flash-Lite,
@@ -176,6 +202,12 @@ func (g *GeminiClient) GenerateWithSearch(ctx context.Context, system string, pa
 
 // call выполняет HTTP-запрос generateContent и разбирает конверт ответа.
 func (g *GeminiClient) call(ctx context.Context, req request) (*response, error) {
+	release, err := g.acquire(ctx)
+	if err != nil {
+		return nil, err
+	}
+	defer release()
+
 	body, err := json.Marshal(req)
 	if err != nil {
 		return nil, fmt.Errorf("gemini: marshal: %w", err)
@@ -214,6 +246,50 @@ func (g *GeminiClient) call(ctx context.Context, req request) (*response, error)
 }
 
 // textOf собирает текст ответа из parts кандидата.
+func (g *GeminiClient) acquire(ctx context.Context) (func(), error) {
+	if g == nil || g.limiter == nil {
+		return func() {}, nil
+	}
+	lim := g.limiter
+	acquired := false
+	if lim.sem != nil {
+		select {
+		case lim.sem <- struct{}{}:
+			acquired = true
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		}
+	}
+	release := func() {
+		if acquired {
+			<-lim.sem
+		}
+	}
+	if err := lim.reserveDaily(); err != nil {
+		release()
+		return nil, err
+	}
+	return release, nil
+}
+
+func (l *geminiLimiter) reserveDaily() error {
+	if l.dailyLimit <= 0 {
+		return nil
+	}
+	day := time.Now().Format("2006-01-02")
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	if l.day != day {
+		l.day = day
+		l.calls = 0
+	}
+	if l.calls >= l.dailyLimit {
+		return fmt.Errorf("gemini: daily limit reached (%d)", l.dailyLimit)
+	}
+	l.calls++
+	return nil
+}
+
 func textOf(gr *response) (string, error) {
 	if len(gr.Candidates) == 0 {
 		return "", fmt.Errorf("gemini: пустой candidates")

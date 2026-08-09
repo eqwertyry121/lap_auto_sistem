@@ -39,11 +39,41 @@ type lot struct {
 	RAMGB    int
 	SSDGB    int
 	GPUModel string
+	GPUScore float64
 }
 
 func (l lot) eur() float64 { return toEUR(l.Price, l.Currency) }
 
 func (l lot) specLabel() string {
+	parts := []string{}
+	if l.CPUModel != "" {
+		parts = append(parts, l.CPUModel)
+	}
+	if l.RAMGB > 0 {
+		parts = append(parts, fmt.Sprintf("%dGB", l.RAMGB))
+	}
+	if l.SSDGB > 0 {
+		parts = append(parts, fmt.Sprintf("SSD %dGB", l.SSDGB))
+	}
+	if l.GPUModel != "" {
+		parts = append(parts, l.GPUModel)
+	}
+	if len(parts) == 0 {
+		return "железо не распознано"
+	}
+	return strings.Join(parts, " / ")
+}
+
+func (l lot) pricingLot() pricing.Lot {
+	return pricing.Lot{
+		AdID: l.AdID, Title: l.Title, URL: l.URL, Price: l.eur(), Kind: l.Kind,
+		CPUModel: l.CPUModel, CPUScore: l.CPUScore,
+		RAMGB: l.RAMGB, SSDGB: l.SSDGB,
+		GPUModel: l.GPUModel, GPUScore: l.GPUScore,
+	}
+}
+
+func pricingSpecLabel(l pricing.Lot) string {
 	parts := []string{}
 	if l.CPUModel != "" {
 		parts = append(parts, l.CPUModel)
@@ -104,19 +134,24 @@ func main() {
 		fmt.Println("выборка:", err)
 		os.Exit(1)
 	}
+	market, err := pricing.LoadMarket(ctx, *dbPath, pricing.DefaultOptions())
+	if err != nil {
+		fmt.Println("рынок:", err)
+		os.Exit(1)
+	}
 
 	if *lotID > 0 {
-		analyzeLot(lots, *lotID)
+		analyzeLot(lots, market, *lotID)
 		return
 	}
-	fullReport(lots, *topN)
+	fullReport(lots, market, *topN)
 }
 
 func loadLots(ctx context.Context, db *sql.DB) ([]lot, error) {
 	rows, err := db.QueryContext(ctx, `
 SELECT a.ad_id, a.title, a.price, a.currency, a.url, a.kind,
 	COALESCE(s.cpu_model,''), COALESCE(s.cpu_score,0), COALESCE(s.ram_gb,0),
-	COALESCE(s.ssd_gb,0), COALESCE(s.gpu_model,'')
+	COALESCE(s.ssd_gb,0), COALESCE(s.gpu_model,''), COALESCE(s.gpu_score,0)
 FROM research_ads a
 LEFT JOIN research_specs s ON s.ad_id = a.ad_id
 WHERE a.fetch_status IN ('SEARCH','OK')`)
@@ -129,7 +164,7 @@ WHERE a.fetch_status IN ('SEARCH','OK')`)
 	for rows.Next() {
 		var l lot
 		if err := rows.Scan(&l.AdID, &l.Title, &l.Price, &l.Currency, &l.URL, &l.Kind,
-			&l.CPUModel, &l.CPUScore, &l.RAMGB, &l.SSDGB, &l.GPUModel); err != nil {
+			&l.CPUModel, &l.CPUScore, &l.RAMGB, &l.SSDGB, &l.GPUModel, &l.GPUScore); err != nil {
 			return nil, err
 		}
 		out = append(out, l)
@@ -137,7 +172,7 @@ WHERE a.fetch_status IN ('SEARCH','OK')`)
 	return out, rows.Err()
 }
 
-func fullReport(lots []lot, topN int) {
+func fullReport(lots []lot, market *pricing.Market, topN int) {
 	total := len(lots)
 	var cpuOK, ramOK, ssdOK, gpuOK, withDesc int
 	var zeroPrice, hugePrice int
@@ -181,11 +216,11 @@ func fullReport(lots []lot, topN int) {
 		prices []float64
 	}
 	byCPU := make(map[string]*cpuStat)
-	for _, l := range lots {
+	for _, l := range market.Pool() {
 		if l.CPUScore == 0 {
 			continue
 		}
-		eur := l.eur()
+		eur := l.Price
 		if eur <= 10 || eur >= 5000 {
 			continue
 		}
@@ -215,43 +250,28 @@ func fullReport(lots []lot, topN int) {
 			truncate(st.model, 28), len(st.prices), st.score, med, med/(st.score/1000))
 	}
 
-	// Лучшие сделки: дешевле медианы своей конфигурации.
+	// Лучшие сделки: только тот же clean pool и тот же pricing.Evaluate, что в funnel.
 	type deal struct {
-		lot lot
-		dev float64 // <0 — дешевле медианы
+		lot pricing.Lot
+		ev  pricing.MarketEvaluation
 	}
 	var deals []deal
-	for _, l := range lots {
-		if l.CPUScore == 0 {
-			continue
-		}
-		eur := l.eur()
-		if eur <= 10 || eur >= 5000 {
-			continue
-		}
-		st := byCPU[l.CPUModel]
-		if st == nil || len(st.prices) < 5 {
-			continue
-		}
-		med := median(st.prices)
-		if med <= 0 {
-			continue
-		}
-		dev := eur/med - 1
-		if dev <= -0.15 {
-			deals = append(deals, deal{lot: l, dev: dev})
+	for _, l := range market.Pool() {
+		ev := market.Evaluate(l)
+		if ev.DevOK && ev.Deviation <= -0.15 && ev.DominatedBy == nil {
+			deals = append(deals, deal{lot: l, ev: ev})
 		}
 	}
-	sort.Slice(deals, func(i, j int) bool { return deals[i].dev < deals[j].dev })
+	sort.Slice(deals, func(i, j int) bool { return deals[i].ev.Deviation < deals[j].ev.Deviation })
 	if len(deals) > topN {
 		deals = deals[:topN]
 	}
 
-	fmt.Printf("\n=== ЛУЧШИЕ СДЕЛКИ: дешевле медианы своей конфигурации (≥15%%, группа ≥5 лотов) ===\n")
+	fmt.Printf("\n=== ЛУЧШИЕ СДЕЛКИ: дешевле comparable-медианы по Market.Evaluate (≥15%%, без dominance) ===\n")
 	for _, d := range deals {
-		st := byCPU[d.lot.CPUModel]
-		fmt.Printf("  %4.0f%%  %7.0f€ (медиана %4.0f€)  %-26s  %s\n",
-			d.dev*100, d.lot.eur(), median(st.prices), d.lot.specLabel(), truncate(d.lot.Title, 60))
+		fmt.Printf("  %4.0f%%  %7.0f€ (comparable %4.0f€, n=%d %s)  %-26s  %s\n",
+			d.ev.Deviation*100, d.lot.Price, d.ev.ComparableMedian, d.ev.Estimate.N, d.ev.Estimate.Level,
+			pricingSpecLabel(d.lot), truncate(d.lot.Title, 60))
 	}
 	if len(deals) == 0 {
 		fmt.Println("  (ничего не нашлось — возможно, рынок эффективен 🙂)")
@@ -261,7 +281,7 @@ func fullReport(lots []lot, topN int) {
 
 // analyzeLot — вердикт по лоту: отклонение от медианы конфигурации и
 // конкретные альтернативы (дешевле то же железо; мощнее за те же деньги).
-func analyzeLot(lots []lot, adID int64) {
+func analyzeLot(lots []lot, market *pricing.Market, adID int64) {
 	var target *lot
 	for i := range lots {
 		if lots[i].AdID == adID {
@@ -282,78 +302,53 @@ func analyzeLot(lots []lot, adID int64) {
 		return
 	}
 
-	// Рынок той же модели CPU.
-	var sameCPU []lot
-	for _, l := range lots {
-		if l.CPUModel == target.CPUModel {
-			eur := l.eur()
-			if eur > 10 && eur < 5000 {
-				sameCPU = append(sameCPU, l)
-			}
-		}
-	}
-	if len(sameCPU) < 3 {
-		fmt.Printf("На рынке меньше 3 лотов с %s — сравнение ненадёжно.\n", target.CPUModel)
+	pl := target.pricingLot()
+	ev := market.Evaluate(pl)
+	if !ev.DevOK {
+		fmt.Println("РЫНОК: в clean market pool нет достаточной сравнимой группы — авто-вердикт ненадёжен.")
 		return
 	}
-	prices := make([]float64, 0, len(sameCPU))
-	for _, l := range sameCPU {
-		prices = append(prices, l.eur())
-	}
-	med := median(prices)
-	dev := target.eur()/med - 1
-
-	fmt.Printf("РЫНОК %s: %d лотов, медиана %.0f€, диапазон %.0f–%.0f€\n",
-		target.CPUModel, len(sameCPU), med, min64(prices), max64(prices))
-	if dev < 0 {
-		fmt.Printf("ВЕРДИКТ: ✅ дешевле медианы своей конфигурации на %.0f%%\n\n", -dev*100)
+	fmt.Printf("РЫНОК: comparable-медиана %.0f€ · p25 %.0f€ · n=%d · уровень %s · confidence=%s\n",
+		ev.ComparableMedian, ev.ComparableP25, ev.Estimate.N, ev.Estimate.Level, ev.Confidence)
+	fmt.Printf("Отклонение цены: %.0f%%\n", ev.Deviation*100)
+	if ev.DominatedBy != nil && ev.DominatedBy.URL != "" {
+		fmt.Printf("DOMINANCE: максимум CHECK — есть более мощный clean private лот %.0f€ · %.0f баллов\n  %s\n  %s\n\n",
+			ev.DominatedBy.Price, ev.DominatedBy.Composite(), truncate(ev.DominatedBy.Title, 70), ev.DominatedBy.URL)
+	} else if ev.Deviation <= -0.15 {
+		fmt.Printf("ВЕРДИКТ: кандидат дешевле comparable-медианы на %.0f%%\n\n", -ev.Deviation*100)
+	} else if ev.Deviation > 0 {
+		fmt.Printf("ВЕРДИКТ: дороже comparable-медианы на %.0f%%\n\n", ev.Deviation*100)
 	} else {
-		fmt.Printf("ВЕРДИКТ: ⚠️ дороже медианы своей конфигурации на %.0f%%\n\n", dev*100)
+		fmt.Printf("ВЕРДИКТ: около рынка\n\n")
 	}
 
-	// 1) То же железо дешевле.
+	// 1) То же железо дешевле: только clean private USED pool с URL.
 	fmt.Printf("--- То же железо дешевле ---\n")
 	shown := 0
-	sort.Slice(sameCPU, func(i, j int) bool { return sameCPU[i].eur() < sameCPU[j].eur() })
-	for _, l := range sameCPU {
-		if l.AdID == target.AdID || l.eur() >= target.eur()*0.95 {
-			continue
-		}
-		fmt.Printf("  %6.0f€  %-50s  %s\n", l.eur(), truncate(l.Title, 50), l.URL)
-		if shown++; shown == 5 {
-			break
-		}
+	for _, l := range market.CheaperSameCPU(pl, 60, 5) {
+		fmt.Printf("  %6.0f€  %-50s  %s\n", l.Price, truncate(l.Title, 50), l.URL)
+		shown++
 	}
 	if shown == 0 {
 		fmt.Println("  (нет вариантов заметно дешевле)")
 	}
 
-	// 2) Мощнее за те же деньги (≥+20% баллов при цене ≤+10%).
+	// 2) Мощнее за те же деньги (≥+20% CPU-баллов при цене ≤+10%).
 	fmt.Printf("\n--- Мощнее за те же деньги (≥+20%% мощности, цена ≤ +10%%) ---\n")
-	var stronger []lot
-	for _, l := range lots {
-		if l.AdID == target.AdID || l.CPUScore == 0 || l.CPUModel == target.CPUModel {
-			continue
-		}
-		eur := l.eur()
-		if eur <= 10 || eur >= 5000 {
-			continue
-		}
-		if l.CPUScore >= target.CPUScore*1.2 && eur <= target.eur()*1.1 {
-			stronger = append(stronger, l)
-		}
-	}
-	sort.Slice(stronger, func(i, j int) bool { return stronger[i].CPUScore > stronger[j].CPUScore })
 	shown = 0
-	for _, l := range stronger {
-		fmt.Printf("  %+.0f%% мощности  %6.0f€  %-22s  %s\n",
-			(l.CPUScore/target.CPUScore-1)*100, l.eur(), truncate(l.CPUModel, 22), truncate(l.Title, 44))
-		if shown++; shown == 5 {
-			break
-		}
+	for _, l := range market.StrongerForBudget(pl, 60, 5, 1.1) {
+		fmt.Printf("  %+.0f%% CPU  %6.0f€  %-22s  %s\n",
+			(l.CPUScore/pl.CPUScore-1)*100, l.Price, truncate(l.CPUModel, 22), l.URL)
+		shown++
 	}
 	if shown == 0 {
 		fmt.Println("  (нет вариантов заметно мощнее за эти деньги)")
+	}
+	if ev.StepUp != nil && ev.StepUp.URL != "" {
+		fmt.Printf("\n--- Шаг вверх ---\n")
+		fmt.Printf("  %.0f€ (+%.0f€), +%.0f баллов: %s\n  %s\n",
+			ev.StepUp.Price, ev.StepUp.Price-pl.Price, ev.StepUp.Composite()-pl.Composite(),
+			truncate(ev.StepUp.Title, 70), ev.StepUp.URL)
 	}
 }
 
@@ -432,14 +427,15 @@ func pricingReport(ctx context.Context, dbPath string) {
 	levels := map[string]int{}
 	var devs []float64
 	for _, l := range pool {
-		est := m.EstimateFor(l)
+		ev := m.Evaluate(l)
+		est := ev.Estimate
 		if est.Level == "" {
 			levels["none"]++
 			continue
 		}
 		levels[est.Level]++
-		if est.Median > 0 {
-			devs = append(devs, l.Price/est.Median-1)
+		if ev.DevOK {
+			devs = append(devs, ev.Deviation)
 		}
 	}
 	fmt.Printf("Покрытие уровней предсказания (пул %d):\n", len(pool))

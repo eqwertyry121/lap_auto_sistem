@@ -15,6 +15,7 @@ func main() {
 	fmt.Printf("  GEMINI_TEXT_MODEL            %q\n", cfg.GeminiTextModel)
 	fmt.Printf("  GEMINI_VISION_MODEL          %q\n", cfg.GeminiVisionModel)
 	fmt.Printf("  GEMINI_SEARCH_MODEL          %q\n", cfg.GeminiSearchModel)
+	fmt.Printf("  GEMINI_DAILY_LIMIT           %d\n", cfg.GeminiDailyLimit)
 	fmt.Printf("  TELEGRAM_BOT_TOKEN           len=%d\n", len(cfg.TelegramToken))
 	fmt.Printf("  TELEGRAM_CHAT_ID             len=%d\n", len(cfg.TelegramChatID))
 	fmt.Printf("  CSV_PATH                     %q\n", cfg.CSVPath)

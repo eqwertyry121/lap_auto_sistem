@@ -130,9 +130,14 @@ func markerWeight(textNorm string) (float64, []string) {
 
 // partsOnlyMarkers — продажа запчастей/нерабочего.
 var partsOnlyMarkers = []string{
-	"neisprav", "pokvaren", "ne radi", "neupaljiv", "za delove", "za dijelove",
-	"za rezervne", "defekt", "ostecen", "broken", "faulty", "parts only",
-	"za otpad", "ne pali se", "ne puni se", "ne daje sliku", "mrtav",
+	"za rezervne delove", "za rezervne dijelove", "za delove", "za dijelove",
+	"delovi", "delove", "dijelovi", "parts only", "za otpad",
+	"maticna ploca", "maticne ploce", "motherboard", "mainboard",
+	"neupaljiv", "ne pali se", "ne daje sliku", "mrtav", "faulty motherboard",
+}
+
+var uncertainBrokenMarkers = []string{
+	"neisprav", "pokvaren", "ne radi", "defekt", "ostecen", "broken", "faulty", "ne puni se",
 }
 
 // defectMarkers — рабочий, но с дефектом (мягкий класс).

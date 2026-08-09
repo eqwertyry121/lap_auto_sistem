@@ -144,6 +144,8 @@ func TestL2_PartsOnly(t *testing.T) {
 		"Laptop neispravan, ekran pukao, za rezervne delove",
 		"Lenovo T450 ne pali se",
 		"HP EliteBook faulty motherboard",
+		"Dell E7450 i7 5600U Delovi",
+		"Matična ploča Asus VivoBook S15 X530F",
 	}
 	for _, title := range cases {
 		v := L2(AdFacts{Title: title})
@@ -164,6 +166,13 @@ func TestL2_Defect(t *testing.T) {
 	v := L2(AdFacts{Title: "ThinkPad T480", Description: "Sve radi, samo baterija ne drzi vise od 20 minuta."})
 	if v.Class != JunkDefect {
 		t.Errorf("дефект батареи: got %s (%v)", v.Class, v.Reasons)
+	}
+}
+
+func TestL2_NeRadiTastaturaIsDefect(t *testing.T) {
+	v := L2(AdFacts{Title: "Laptop ne radi tastatura"})
+	if v.Class != JunkDefect {
+		t.Fatalf("ne radi tastatura: got %s (%v), want DEFECT", v.Class, v.Reasons)
 	}
 }
 

@@ -256,15 +256,62 @@ func AbsURL(p string) string {
 
 // ParsePrice превращает «2 500», «1.299,00», «€220» и т.п. в число.
 func ParsePrice(s string) float64 {
-	var b strings.Builder
-	dot := false
+	clean := make([]rune, 0, len(s))
+	var seps []int
 	for _, r := range strings.TrimSpace(s) {
 		switch {
 		case r >= '0' && r <= '9':
+			clean = append(clean, r)
+		case r == '.' || r == ',':
+			seps = append(seps, len(clean))
+			clean = append(clean, r)
+		}
+	}
+	if len(clean) == 0 {
+		return 0
+	}
+
+	decimalAt := -1
+	if len(seps) > 0 {
+		last := seps[len(seps)-1]
+		digitsAfter := 0
+		for i := last + 1; i < len(clean); i++ {
+			if clean[i] >= '0' && clean[i] <= '9' {
+				digitsAfter++
+			}
+		}
+		digitsBefore := 0
+		for i := 0; i < last; i++ {
+			if clean[i] >= '0' && clean[i] <= '9' {
+				digitsBefore++
+			}
+		}
+		hasDot, hasComma := false, false
+		for _, r := range clean {
+			hasDot = hasDot || r == '.'
+			hasComma = hasComma || r == ','
+		}
+		switch {
+		case hasDot && hasComma:
+			if digitsAfter > 0 && digitsAfter <= 2 {
+				decimalAt = last
+			}
+		case len(seps) == 1:
+			if digitsAfter > 0 && digitsAfter <= 2 {
+				decimalAt = last
+			} else if digitsAfter == 3 && digitsBefore == 0 {
+				decimalAt = last
+			}
+		}
+	}
+
+	var b strings.Builder
+	for i, r := range clean {
+		switch {
+		case r >= '0' && r <= '9':
 			b.WriteRune(r)
-		case (r == '.' || r == ',') && !dot:
-			b.WriteRune('.')
-			dot = true
+		case i == decimalAt:
+			b.WriteByte('.')
 		}
 	}
 	f, _ := strconv.ParseFloat(b.String(), 64)

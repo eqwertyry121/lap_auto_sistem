@@ -193,6 +193,15 @@ func migrateResearch(db *sql.DB) error {
 			return err
 		}
 	}
+	if _, err := db.Exec(`
+DELETE FROM research_specs
+WHERE source='regex'
+  AND ad_id IN (
+	SELECT ad_id FROM research_ads
+	WHERE fetch_status!='OK' OR description=''
+  )`); err != nil {
+		return err
+	}
 	return nil
 }
 

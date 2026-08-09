@@ -109,7 +109,7 @@ const (
 
 // Ценовые границы статистики (PLAN_v4 §3.5, L0).
 const (
-	priceFloor = 1.0
+	priceFloor = 10.0
 	priceCeil  = 5000.0
 )
 
@@ -204,7 +204,9 @@ LEFT JOIN (
 	WHERE user_id != 0
 	GROUP BY user_id
 ) sa ON sa.user_id = a.user_id
-WHERE a.fetch_status IN ('SEARCH','OK')`)
+WHERE a.fetch_status='OK'
+  AND a.kind='USED'
+  AND a.url != ''`)
 	if err != nil {
 		return nil, err
 	}
@@ -273,7 +275,7 @@ func (m *Market) statsPool(windowDays int) []Lot {
 	cutoff := m.builtAt.AddDate(0, 0, -windowDays)
 	out := make([]Lot, 0, len(m.lots)/2)
 	for _, l := range m.lots {
-		if l.CPUScore <= 0 || l.IsShop || l.Kind == "BROKEN" {
+		if l.CPUScore <= 0 || l.IsShop || l.Kind != "USED" || l.URL == "" {
 			continue
 		}
 		// PLAN_v5: рынок ноутбуков с дискретной графикой — без dGPU лоты
@@ -282,6 +284,9 @@ func (m *Market) statsPool(windowDays int) []Lot {
 			continue
 		}
 		if l.Price < priceFloor || l.Price > priceCeil {
+			continue
+		}
+		if filters.L2(filters.AdFacts{Title: l.Title, PriceEUR: l.Price}).Class == filters.JunkPartsOnly {
 			continue
 		}
 		if l.Posted.IsZero() || l.Posted.Before(cutoff) {
@@ -298,10 +303,13 @@ func (m *Market) hedonicTraining(windowDays int) []Lot {
 	cutoff := m.builtAt.AddDate(0, 0, -windowDays)
 	var out []Lot
 	for _, l := range m.lots {
-		if l.Kind != "USED" || l.IsShop || l.CPUScore <= 0 {
+		if l.Kind != "USED" || l.IsShop || l.CPUScore <= 0 || l.URL == "" {
 			continue
 		}
-		if l.Price < 10 || l.Price > priceCeil {
+		if l.Price < priceFloor || l.Price > priceCeil {
+			continue
+		}
+		if filters.L2(filters.AdFacts{Title: l.Title, PriceEUR: l.Price}).Class == filters.JunkPartsOnly {
 			continue
 		}
 		if l.Posted.IsZero() || l.Posted.Before(cutoff) {
@@ -447,6 +455,28 @@ func median(vals []float64) float64 {
 	}
 }
 
+func percentile(vals []float64, q float64) float64 {
+	v := append([]float64(nil), vals...)
+	sort.Float64s(v)
+	n := len(v)
+	if n == 0 {
+		return 0
+	}
+	if q <= 0 {
+		return v[0]
+	}
+	if q >= 1 {
+		return v[n-1]
+	}
+	pos := q * float64(n-1)
+	lo := int(math.Floor(pos))
+	hi := int(math.Ceil(pos))
+	if lo == hi {
+		return v[lo]
+	}
+	return v[lo] + (v[hi]-v[lo])*(pos-float64(lo))
+}
+
 func medianAbsDev(vals []float64, med float64) float64 {
 	devs := make([]float64, len(vals))
 	for i, v := range vals {
@@ -458,6 +488,7 @@ func medianAbsDev(vals []float64, med float64) float64 {
 // PriceEstimate — предсказание рыночной цены для лота по иерархии
 // K0 → K1 → K2 → гедоническая модель. Level: K0/K1/K2/K3/"".
 type PriceEstimate struct {
+	P25            float64 // comparable 25th percentile when a group backs the estimate
 	Median         float64 // рыночный ориентир после конкурентного потолка
 	RawMedian      float64 // сырая медиана группы или предсказание OLS до потолка
 	N              int     // размер опорной выборки
@@ -473,6 +504,63 @@ func (m *Market) EstimateFor(l Lot) PriceEstimate {
 
 func (e PriceEstimate) Capped() bool {
 	return e.RawMedian > 0 && e.CompetitiveCap > 0 && e.CompetitiveCap < e.RawMedian && e.CapLot != nil
+}
+
+// MarketEvaluation keeps comparable market stats separate from stronger-lot ceilings.
+type MarketEvaluation struct {
+	Estimate           PriceEstimate
+	ComparableMedian   float64
+	ComparableP25      float64
+	OpportunityCeiling float64
+	OpportunityBy      *Lot
+	DominatedBy        *Lot
+	StepUp             *Lot
+	Confidence         string
+	Deviation          float64
+	DevOK              bool
+}
+
+func (m *Market) Evaluate(l Lot) MarketEvaluation {
+	est := m.estimateFor(l, true)
+	ev := MarketEvaluation{
+		Estimate:         est,
+		ComparableMedian: est.Median,
+		ComparableP25:    est.P25,
+		Confidence:       confidenceFor(est),
+	}
+	if est.Median > 0 {
+		ev.Deviation = l.Price/est.Median - 1
+		ev.DevOK = true
+		if capLot, ok := m.competitiveCapLot(l, est.Median); ok {
+			ev.OpportunityCeiling = capLot.Price
+			ev.OpportunityBy = &capLot
+		}
+	}
+	if dom, ok := m.dominanceLot(l); ok {
+		ev.DominatedBy = &dom
+		if ev.OpportunityCeiling <= 0 || dom.Price < ev.OpportunityCeiling {
+			ev.OpportunityCeiling = dom.Price
+			ev.OpportunityBy = &dom
+		}
+	}
+	if steps := m.BestStepUp(l, m.marketWindowDays(), 1); len(steps) > 0 && steps[0].URL != "" {
+		step := steps[0]
+		ev.StepUp = &step
+	}
+	return ev
+}
+
+func confidenceFor(est PriceEstimate) string {
+	switch {
+	case est.Level == "K0" && est.N >= minN_K0:
+		return "HIGH"
+	case (est.Level == "K1" || est.Level == "K2") && est.N >= minN_K1:
+		return "MEDIUM"
+	case est.Level == "K3" && est.N > 0:
+		return "LOW"
+	default:
+		return "NONE"
+	}
 }
 
 func (m *Market) estimateFor(l Lot, leaveOneOut bool) PriceEstimate {
@@ -500,7 +588,7 @@ func (m *Market) estimateFor(l Lot, leaveOneOut bool) PriceEstimate {
 			if med <= 0 || n < c.minN {
 				continue
 			}
-			return m.withCompetitiveCap(l, PriceEstimate{Median: med, RawMedian: med, N: n, Level: c.level})
+			return PriceEstimate{Median: med, RawMedian: med, P25: percentile(prices, 0.25), N: n, Level: c.level}
 		}
 	}
 	if m.hedonic != nil && m.hedonic.Usable {
@@ -508,7 +596,7 @@ func (m *Market) estimateFor(l Lot, leaveOneOut bool) PriceEstimate {
 		if pred <= 0 {
 			return PriceEstimate{}
 		}
-		return m.withCompetitiveCap(l, PriceEstimate{Median: pred, RawMedian: pred, N: m.hedonic.N, Level: "K3"})
+		return PriceEstimate{Median: pred, RawMedian: pred, N: m.hedonic.N, Level: "K3"}
 	}
 	return PriceEstimate{}
 }
@@ -525,6 +613,13 @@ func pricesExcluding(items []groupPrice, adID int64) []float64 {
 }
 
 const competitiveCapStrongerPct = 0.20
+
+func (m *Market) marketWindowDays() int {
+	if m.medianWindowDays > 0 {
+		return m.medianWindowDays
+	}
+	return 60
+}
 
 // withCompetitiveCap не даёт медиане слабой конфигурации оторваться от живого
 // рынка: если в том же свежем частном пуле есть существенно более мощный лот
@@ -553,11 +648,7 @@ func (m *Market) competitiveCapLot(target Lot, maxPrice float64) (Lot, bool) {
 		best Lot
 		ok   bool
 	)
-	windowDays := m.medianWindowDays
-	if windowDays <= 0 {
-		windowDays = 60
-	}
-	for _, l := range m.candidates(windowDays) {
+	for _, l := range m.candidates(m.marketWindowDays()) {
 		if l.AdID == target.AdID || l.Price <= 0 || l.Price >= maxPrice {
 			continue
 		}
@@ -580,12 +671,34 @@ func (m *Market) competitiveCapLot(target Lot, maxPrice float64) (Lot, bool) {
 // проверяется ПОСЛЕ исключения (n−1): сравнивать не с чем — уровень
 // понижается по иерархии. Для лотов вне датасета (живой бот) медиана
 // берётся целиком. NaN-защита: без оценки возвращает 0 и false.
-func (m *Market) Deviation(l Lot) (float64, bool) {
-	est := m.estimateFor(l, true)
-	if est.Median <= 0 {
-		return 0, false
+func (m *Market) dominanceLot(target Lot) (Lot, bool) {
+	targetScore := target.Composite()
+	if targetScore <= 0 || target.Price <= 0 {
+		return Lot{}, false
 	}
-	return l.Price/est.Median - 1, true
+	maxPrice := math.Max(target.Price*1.10, target.Price+20)
+	minScore := targetScore * (1 + competitiveCapStrongerPct)
+	var (
+		best Lot
+		ok   bool
+	)
+	for _, l := range m.candidates(m.marketWindowDays()) {
+		if l.AdID == target.AdID || l.Price <= 0 || l.Price > maxPrice {
+			continue
+		}
+		if l.Composite() < minScore {
+			continue
+		}
+		if !ok || l.Price < best.Price || (l.Price == best.Price && l.Composite() > best.Composite()) {
+			best, ok = l, true
+		}
+	}
+	return best, ok
+}
+
+func (m *Market) Deviation(l Lot) (float64, bool) {
+	ev := m.Evaluate(l)
+	return ev.Deviation, ev.DevOK
 }
 
 // Lots — все загруженные лоты (для альтернатив и отчётов).

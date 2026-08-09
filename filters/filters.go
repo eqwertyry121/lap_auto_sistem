@@ -3,6 +3,7 @@ package filters
 import (
 	"fmt"
 	"regexp"
+	"sort"
 	"strings"
 )
 
@@ -164,15 +165,19 @@ func L2(f AdFacts) Verdict {
 
 	textNorm := normalize(f.Title + " " + f.Description)
 
-	for _, m := range partsOnlyMarkers {
-		if strings.Contains(textNorm, m) {
-			if f.MedianEUR > 0 && f.PriceEUR >= 0.6*f.MedianEUR {
-				return Verdict{JunkUncertain,
-					[]string{fmt.Sprintf("маркер «%s», но цена %.0f€ ≥ 60%% медианы %.0f€ — проверить вручную",
-						m, f.PriceEUR, f.MedianEUR)}}
-			}
-			return Verdict{JunkPartsOnly, []string{"маркер «" + m + "»"}}
+	if m := firstMarker(textNorm, defectMarkers); m != "" {
+		if !(m == "bez punjaca" && chargerIsIncluded(textNorm)) {
+			return Verdict{JunkDefect, []string{"РґРµС„РµРєС‚: В«" + m + "В»"}}
 		}
+	}
+
+	if m := firstMarker(textNorm, partsOnlyMarkers); m != "" {
+		if f.MedianEUR > 0 && f.PriceEUR >= 0.6*f.MedianEUR {
+			return Verdict{JunkUncertain,
+				[]string{fmt.Sprintf("маркер «%s», но цена %.0f€ ≥ 60%% медианы %.0f€ — проверить вручную",
+					m, f.PriceEUR, f.MedianEUR)}}
+		}
+		return Verdict{JunkPartsOnly, []string{"маркер «" + m + "»"}}
 	}
 
 	for _, m := range defectMarkers {
@@ -187,12 +192,35 @@ func L2(f AdFacts) Verdict {
 		return Verdict{JunkDefect, []string{"дефект: «" + m + "»"}}
 	}
 
+	if m := firstMarker(textNorm, uncertainBrokenMarkers); m != "" {
+		if f.MedianEUR <= 0 {
+			return Verdict{JunkUncertain, []string{"С€РёСЂРѕРєРёР№ РјР°СЂРєРµСЂ В«" + m + "В» Р±РµР· С†РµРЅРѕРІРѕРіРѕ РєСЂРѕСЃСЃ-С‡РµРєР°"}}
+		}
+		if f.PriceEUR >= 0.6*f.MedianEUR {
+			return Verdict{JunkUncertain,
+				[]string{fmt.Sprintf("РјР°СЂРєРµСЂ В«%sВ», РЅРѕ С†РµРЅР° %.0fв‚¬ в‰Ґ 60%% РјРµРґРёР°РЅС‹ %.0fв‚¬ вЂ” РїСЂРѕРІРµСЂРёС‚СЊ РІСЂСѓС‡РЅСѓСЋ",
+					m, f.PriceEUR, f.MedianEUR)}}
+		}
+		return Verdict{JunkPartsOnly, []string{"РјР°СЂРєРµСЂ В«" + m + "В»"}}
+	}
+
 	return Verdict{JunkClean, nil}
 }
 
 // chargerIsIncluded — «bez punjaca» НЕ дефект, если (а) зарядка явно в
 // комплекте («sa punjacem» и пр.) или (б) ВСЕ вхождения стоят в условном
 // обороте («ukoliko zelite bez punjaca cena je 200e» — опция скидки).
+func firstMarker(textNorm string, markers []string) string {
+	ordered := append([]string(nil), markers...)
+	sort.Slice(ordered, func(i, j int) bool { return len(ordered[i]) > len(ordered[j]) })
+	for _, m := range ordered {
+		if strings.Contains(textNorm, m) {
+			return m
+		}
+	}
+	return ""
+}
+
 func chargerIsIncluded(textNorm string) bool {
 	for _, ok := range []string{"sa punjacem", "punjac ide uz", "punjac u kompletu", "punjac je ukljucen"} {
 		if strings.Contains(textNorm, ok) {

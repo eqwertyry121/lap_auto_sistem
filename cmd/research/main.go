@@ -602,7 +602,9 @@ func enrich(ctx context.Context, store *researchStore, hwPath string) error {
 	}
 
 	rows, err := store.db.QueryContext(ctx,
-		`SELECT ad_id, title, description FROM research_ads WHERE fetch_status IN ('SEARCH','OK')`)
+		`SELECT ad_id, title, description
+		 FROM research_ads
+		 WHERE fetch_status='OK' AND description != ''`)
 	if err != nil {
 		return err
 	}

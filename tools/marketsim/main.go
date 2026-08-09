@@ -79,8 +79,9 @@ func main() {
 		RAMGB: *ramGB, SSDGB: *ssdGB,
 		GPUModel: *gpuName, GPUScore: gpuScore,
 	}
-	est := m.EstimateFor(lot)
-	dev, devOK := m.Deviation(lot)
+	eval := m.Evaluate(lot)
+	est := eval.Estimate
+	dev, devOK := eval.Deviation, eval.DevOK
 	fmt.Printf("\nОценка рынка: уровень=%s медиана/предсказание=%.0f€ n=%d\n",
 		orDash(est.Level), est.Median, est.N)
 	if !devOK {
@@ -88,9 +89,22 @@ func main() {
 		return
 	}
 	fmt.Printf("Отклонение: %+.0f%% (devOK=true) → воронка считала бы вердикт L5\n", dev*100)
+	ceilingBy := eval.OpportunityBy
+	if ceilingBy == nil {
+		ceilingBy = eval.DominatedBy
+	}
+	if eval.OpportunityCeiling > 0 && ceilingBy != nil {
+		fmt.Printf("Opportunity ceiling: %.0f€ by stronger lot %d %s\n",
+			eval.OpportunityCeiling, ceilingBy.AdID, ceilingBy.URL)
+	}
+	if eval.StepUp != nil {
+		fmt.Printf("Step-up: %.0f€ %s %s\n", eval.StepUp.Price, eval.StepUp.Title, eval.StepUp.URL)
+	}
 	switch {
 	case dev > 0.05:
 		fmt.Println("L5: EXPENSIVE (тихо)")
+	case eval.DominatedBy != nil && dev <= -0.15:
+		fmt.Println("L5: CHECK (dominated by stronger URL-backed lot)")
 	case dev < -0.40:
 		fmt.Println("L5: DIAMOND_SUSPECT (алерт)")
 	case dev <= -0.15:
