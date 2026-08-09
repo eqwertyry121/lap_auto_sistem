@@ -1,6 +1,6 @@
 // smoke — быстрая проверка живых ключей без запуска полного бота:
-//   1) Gemini отвечает на тестовый запрос (валидность GEMINI_API_KEY и модели);
-//   2) Telegram шлёт сообщение (если заданы токен и chat_id).
+//  1. Gemini отвечает на тестовый запрос (валидность GEMINI_API_KEY и модели);
+//  2. Telegram шлёт сообщение (если заданы токен и chat_id).
 package main
 
 import (
@@ -25,13 +25,13 @@ func main() {
 	if cfg.GeminiAPIKey == "" {
 		fmt.Println("[GEMINI] GEMINI_API_KEY не задан — пропускаю")
 	} else {
-		g := vision.NewGeminiClient(cfg.GeminiAPIKey, cfg.GeminiModel)
+		g := vision.NewGeminiClient(cfg.GeminiAPIKey, cfg.GeminiTextModel)
 
 		out, err := g.Generate(ctx, "Ты тест. Ответь строго JSON.", []vision.Part{{Text: `Верни ровно один JSON-объект: {"ok":true}`}})
 		if err != nil {
 			fmt.Println("[GEMINI-TEXT] ОШИБКА:", err)
 		} else {
-			fmt.Printf("[GEMINI-TEXT] OK, модель=%s, ответ: %s\n", cfg.GeminiModel, truncate(out, 120))
+			fmt.Printf("[GEMINI-TEXT] OK, модель=%s, ответ: %s\n", cfg.GeminiTextModel, truncate(out, 120))
 		}
 
 		// Vision: берём одно реальное фото ноутбука с KP и просим Gemini его описать.
@@ -40,7 +40,8 @@ func main() {
 			if err != nil {
 				fmt.Println("[GEMINI-VISION] не удалось скачать фото:", err)
 			} else {
-				vOut, err := g.Generate(ctx, "Опиши ноутбук на фото одним предложением. Ответь строго JSON.",
+				vg := g.WithModel(cfg.GeminiVisionModel)
+				vOut, err := vg.Generate(ctx, "Опиши ноутбук на фото одним предложением. Ответь строго JSON.",
 					[]vision.Part{{Text: `Верни JSON: {"what":"..."}`}, *img})
 				if err != nil {
 					fmt.Println("[GEMINI-VISION] ОШИБКА:", err)

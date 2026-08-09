@@ -11,7 +11,7 @@ import (
 
 // MarkersVersion — версия словарей. Любое изменение словарей/весов меняет
 // версию и требует регрессионного прогона cmd/filtertest.
-const MarkersVersion = 3
+const MarkersVersion = 4
 
 // normalize — нижний регистр + снятие сербской диакритики, чтобы один
 // словарь ловил и «saobražnost», и «saobraznost».

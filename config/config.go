@@ -17,6 +17,9 @@ type Config struct {
 
 	GeminiAPIKey      string
 	GeminiModel       string
+	GeminiTextModel   string
+	GeminiVisionModel string
+	GeminiSearchModel string
 	GeminiConcurrency int
 
 	TelegramToken  string
@@ -49,7 +52,7 @@ type Config struct {
 	// модель→железо), а НЕ для цен. Цены — только наши данные KP.
 	WebResearch  bool // WEB_RESEARCH=0: выключить интернет-определение железа (по умолчанию включён)
 	ManualMinEUR int  // MANUAL_MIN_EUR: алерт «нужно посмотреть» только от этой цены (400)
-	MooseMinEUR  int  // MOOSE_MIN_EUR: ЛОСЬ-сводка (редкое железо) только от этой цены (400)
+	MooseMinEUR  int  // MOOSE_MIN_EUR: сводка редкого железа только от этой цены (400)
 
 	// PLAN_v5: арбитраж ноутбуков с дискретной графикой.
 	BannedModels []string // BANNED_MODELS: запрещённые линейки через запятую (macbook)
@@ -60,6 +63,8 @@ type Config struct {
 // Load читает конфигурацию из переменных окружения (.env подхватывается автоматически).
 func Load() *Config {
 	_ = godotenv.Load() // .env не обязателен
+	baseGeminiModel := envStr("GEMINI_MODEL", "gemini-2.5-flash-lite")
+	liteGeminiModel := envStr("GEMINI_LITE_MODEL", "gemini-2.5-flash-lite")
 
 	return &Config{
 		PollInterval:      envDurationSec("POLL_INTERVAL_SEC", 45),
@@ -67,7 +72,10 @@ func Load() *Config {
 		MaxPhotos:         envInt("MAX_PHOTOS_PER_AD", 5),
 		FetchDelay:        time.Duration(envInt("FETCH_DELAY_MS", 700)) * time.Millisecond,
 		GeminiAPIKey:      os.Getenv("GEMINI_API_KEY"),
-		GeminiModel:       envStr("GEMINI_MODEL", "gemini-flash-latest"),
+		GeminiModel:       baseGeminiModel,
+		GeminiTextModel:   envStr("GEMINI_TEXT_MODEL", liteGeminiModel),
+		GeminiVisionModel: envStr("GEMINI_VISION_MODEL", liteGeminiModel),
+		GeminiSearchModel: envStr("GEMINI_SEARCH_MODEL", liteGeminiModel),
 		GeminiConcurrency: envInt("GEMINI_CONCURRENCY", 5),
 		TelegramToken:     os.Getenv("TELEGRAM_BOT_TOKEN"),
 		TelegramChatID:    os.Getenv("TELEGRAM_CHAT_ID"),

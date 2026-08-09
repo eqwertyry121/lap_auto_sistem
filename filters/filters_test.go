@@ -58,14 +58,30 @@ func TestL1_PrivateSellerPasses(t *testing.T) {
 	}
 }
 
-func TestL1_IgnoresBehavioralSignals(t *testing.T) {
-	// Решение 2026-08-05 в силе для поведенческих сигналов: число лотов и
-	// возраст аккаунта НЕ режут (в отличие от честных меток KP, PLAN_v8).
-	if v := L1(AdFacts{Title: "Laptop i5", Description: "Prodajem svoj laptop.", SellerAds: 12}); v.Class == ClassShop {
-		t.Errorf("SellerAds не должен резать: %v", v.Reasons)
+func TestL1_BehavioralSignals(t *testing.T) {
+	if v := L1(AdFacts{Title: "Laptop i5", Description: "Prodajem svoj laptop.", SellerAds: 5}); v.Class == ClassShop {
+		t.Errorf("5 лотов без других признаков не должны резать: %v", v.Reasons)
+	}
+	if v := L1(AdFacts{Title: "Laptop i5", Description: "Prodajem svoj laptop.", SellerAds: 12}); v.Class != ClassShop {
+		t.Errorf("12 лотов должны резать как перекуп/магазин: %s (%v)", v.Class, v.Reasons)
+	}
+	if v := L1(AdFacts{Title: "Laptop i5", Description: "Prodajem svoj laptop.", SellerAds: 6}); v.Class == ClassShop {
+		t.Errorf("средний объём без доп. сигналов не должен резать: %v", v.Reasons)
+	}
+	if v := L1(AdFacts{Title: "Laptop i5", Description: "Prodajem svoj laptop.", SellerAds: 6, IsRenewed: true}); v.Class != ClassShop {
+		t.Errorf("средний объём + автообновление должен резать: %s (%v)", v.Class, v.Reasons)
 	}
 	if v := L1(AdFacts{Title: "Laptop i5", Description: "Prodajem svoj laptop.", SellerAds: 4, SellerAgeDays: 20}); v.Class == ClassShop {
-		t.Errorf("молодой аккаунт не должен резать: %v", v.Reasons)
+		t.Errorf("молодой аккаунт сам по себе не должен резать: %v", v.Reasons)
+	}
+}
+
+func TestL1_SellerHistoryAndName(t *testing.T) {
+	if v := L1(AdFacts{Title: "Laptop i5", SellerTraderSeen: true}); v.Class != ClassShop {
+		t.Errorf("история Trgovac должна резать: %s (%v)", v.Class, v.Reasons)
+	}
+	if v := L1(AdFacts{Title: "Laptop i5", Seller: "Laptop Centar NS"}); v.Class != ClassShop {
+		t.Errorf("коммерческое имя продавца должно резать: %s (%v)", v.Class, v.Reasons)
 	}
 }
 
@@ -82,6 +98,13 @@ func TestL1_ResellerMulticity(t *testing.T) {
 	joined := strings.Join(v.Reasons, "; ")
 	if !strings.Contains(joined, "М7") {
 		t.Errorf("среди причин нет М7 (мультигород): %v", v.Reasons)
+	}
+}
+
+func TestL1_PluralMultiListingTitle(t *testing.T) {
+	v := L1(AdFacts{Title: "Gaming Laptopovi Acer, Lenovo", Description: "Prodajem vise modela"})
+	if v.Class != ClassShop {
+		t.Fatalf("plural/multi-brand title должен резать мультилистинг: %s (%v)", v.Class, v.Reasons)
 	}
 }
 

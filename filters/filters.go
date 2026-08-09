@@ -29,10 +29,17 @@ type AdFacts struct {
 	Condition     string // поле KP: new/used/broken/""
 	IsTrader      bool   // KP пометил торговца (М1)
 	KPIzlog       bool   // витрина KP Izlog (М2)
+	IsRenewed     bool   // автообновление объявления
 	PriceEUR      float64
 	MedianEUR     float64
 	SellerAds     int // активных лотов продавца по реестру (М3)
 	SellerAgeDays int // возраст аккаунта в днях; -1 = неизвестен (М6)
+	Reviews       int // отзывы продавца
+
+	// Исторические метки из research.db: если этот user_id уже встречался как
+	// торговец/витрина, текущий лот считаем коммерческим даже без свежей метки.
+	SellerTraderSeen  bool
+	SellerKPIzlogSeen bool
 }
 
 // Verdict — результат фильтра: класс + причины (для аудита и дайджеста).
@@ -49,16 +56,31 @@ var (
 	// М4: ячейка «| … €» — цена, стоящая за трубой: признак табличного
 	// прайса. Описания хранятся плоским текстом (HTML-теги → пробелы),
 	// поэтому «строки» ищем без привязки к переводам строк.
-	pipePriceRe = regexp.MustCompile(`\|[^|]{0,40}€`)
+	pipePriceRe          = regexp.MustCompile(`\|[^|]{0,40}€`)
+	pluralLaptopTitleRe  = regexp.MustCompile(`\blaptopovi\b`)
+	multipleBrandTitleRe = regexp.MustCompile(`\b(acer|asus|dell|hp|lenovo|msi|fujitsu|toshiba|alienware|gigabyte|razer)\b[^,]{0,40},[^,]{0,40}\b(acer|asus|dell|hp|lenovo|msi|fujitsu|toshiba|alienware|gigabyte|razer)\b`)
+)
+
+var sellerNameShopMarkers = []string{
+	"shop", "store", "laptop centar", "centar laptopa", "laptop servis",
+	"servis racunara", "racunari", "kompjuteri", "computer", "doo", "d.o.o",
+	"trade", "komerc", "best buy",
+}
+
+const (
+	sellerAdsHardThreshold = 12
+	sellerAdsSoftThreshold = 6
+	highReviewsThreshold   = 25
 )
 
 // L1 — фильтр магазинов. PLAN_v8 (2026-08-06): к детекции по тексту описания
 // (М4, М5) добавлены ЧЕСТНЫЕ метки KP (М1, М2) — решение 2026-08-05 «метки не
 // использовать» отменено пользователем после починки is_trader: KP присылает
 // объект trader ВСЕМ, и только title «Trgovac» означает заявленного торговца
-// (регрессия в models/models_test.go). Поведенческие подсчёты (число лотов,
-// возраст аккаунта) по-прежнему НЕ используются. UNKNOWN трактуруется
-// вызывающим кодом как PRIVATE.
+// (регрессия в models/models_test.go). Поведенческие подсчёты используются
+// консервативно: история торговца/витрины режет сразу, много лотов режет
+// только на высоком пороге или в связке с автообновлением/отзывами/маркерами.
+// UNKNOWN трактуруется вызывающим кодом как PRIVATE.
 func L1(f AdFacts) Verdict {
 	// М1/М2 — честные метки KP: заявленный торговец или витрина.
 	if f.IsTrader {
@@ -67,8 +89,27 @@ func L1(f AdFacts) Verdict {
 	if f.KPIzlog {
 		return Verdict{ClassShop, []string{"М2: витрина KP Izlog — профессиональный продавец"}}
 	}
+	if f.SellerTraderSeen {
+		return Verdict{ClassShop, []string{"М1-history: этот user_id уже встречался как Trgovac"}}
+	}
+	if f.SellerKPIzlogSeen {
+		return Verdict{ClassShop, []string{"М2-history: этот user_id уже встречался с KP Izlog"}}
+	}
 
 	textNorm := normalize(f.Title + " " + f.Description)
+	titleNorm := normalize(f.Title)
+	if pluralLaptopTitleRe.MatchString(titleNorm) {
+		return Verdict{ClassShop, []string{"М4: заголовок во множественном числе («laptopovi») — похоже на мультилистинг"}}
+	}
+	if multipleBrandTitleRe.MatchString(titleNorm) {
+		return Verdict{ClassShop, []string{"М4: несколько брендов в заголовке — похоже на мультилистинг"}}
+	}
+	sellerNorm := normalize(f.Seller)
+	for _, m := range sellerNameShopMarkers {
+		if strings.Contains(sellerNorm, m) {
+			return Verdict{ClassShop, []string{"М3: коммерческое имя продавца («" + m + "»)"}}
+		}
+	}
 
 	// М4 — мультилистинг: один лот = прайс-лист на много машин.
 	if n := len(priceListItemRe.FindAllString(textNorm, -1)); n >= 3 {
@@ -83,6 +124,22 @@ func L1(f AdFacts) Verdict {
 	// М5 — маркеры описаний (взвешенная сумма слов из текста; М7 «мультигород»
 	// считается внутри markerWeight).
 	weight, reasons := markerWeight(textNorm)
+	if f.SellerAds >= sellerAdsHardThreshold {
+		return Verdict{ClassShop,
+			[]string{fmt.Sprintf("М3: у продавца %d лотов в датасете (≥%d) — похоже на перекупа/магазин",
+				f.SellerAds, sellerAdsHardThreshold)}}
+	}
+	if f.SellerAds >= sellerAdsSoftThreshold && (f.IsRenewed || f.Reviews >= highReviewsThreshold || weight > 0) {
+		why := []string{fmt.Sprintf("М3: у продавца %d лотов в датасете (≥%d)", f.SellerAds, sellerAdsSoftThreshold)}
+		if f.IsRenewed {
+			why = append(why, "автообновление объявления")
+		}
+		if f.Reviews >= highReviewsThreshold {
+			why = append(why, fmt.Sprintf("%d отзывов", f.Reviews))
+		}
+		why = append(why, reasons...)
+		return Verdict{ClassShop, why}
+	}
 	if weight >= ThresholdL1 {
 		return Verdict{ClassShop,
 			append([]string{fmt.Sprintf("М5: вес маркеров %.1f ≥ %.1f", weight, ThresholdL1)}, reasons...)}

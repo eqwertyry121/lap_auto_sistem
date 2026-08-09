@@ -20,6 +20,7 @@ import (
 
 	_ "modernc.org/sqlite"
 
+	"kpbot/filters"
 	"kpbot/hw"
 )
 
@@ -189,11 +190,20 @@ func loadLots(ctx context.Context, dbPath string, rsdRate float64) ([]Lot, error
 
 	rows, err := db.QueryContext(ctx, `
 SELECT a.ad_id, a.title, a.url, a.price, a.currency, a.posted, a.kind,
-	a.is_trader, a.kp_izlog,
-	COALESCE(s.cpu_model,''), COALESCE(s.cpu_score,0), COALESCE(s.ram_gb,0),
-	COALESCE(s.ssd_gb,0), COALESCE(s.gpu_model,''), COALESCE(s.gpu_score,0)
+	a.description, a.seller, a.is_trader, a.kp_izlog, a.is_renewed,
+	COALESCE(sa.ads_count,0), COALESCE(sel.trader_seen,0), COALESCE(sel.kpizlog_seen,0),
+	COALESCE(sel.reviews,0), COALESCE(sel.user_created,''),
+	COALESCE(sp.cpu_model,''), COALESCE(sp.cpu_score,0), COALESCE(sp.ram_gb,0),
+	COALESCE(sp.ssd_gb,0), COALESCE(sp.gpu_model,''), COALESCE(sp.gpu_score,0)
 FROM research_ads a
-LEFT JOIN research_specs s ON s.ad_id = a.ad_id
+LEFT JOIN research_specs sp ON sp.ad_id = a.ad_id
+LEFT JOIN sellers sel ON sel.user_id = a.user_id
+LEFT JOIN (
+	SELECT user_id, COUNT(*) AS ads_count
+	FROM research_ads
+	WHERE user_id != 0
+	GROUP BY user_id
+) sa ON sa.user_id = a.user_id
 WHERE a.fetch_status IN ('SEARCH','OK')`)
 	if err != nil {
 		return nil, err
@@ -203,18 +213,39 @@ WHERE a.fetch_status IN ('SEARCH','OK')`)
 	var out []Lot
 	for rows.Next() {
 		var (
-			l                 Lot
-			price             float64
-			currency, posted  string
-			isTrader, kpIzlog int
+			l                                      Lot
+			price                                  float64
+			currency, posted, desc, seller, joined string
+			isTrader, kpIzlog, isRenewed           int
+			sellerAds                              int
+			sellerTraderSeen, sellerKPIzlogSeen    int
+			reviews                                int
 		)
 		if err := rows.Scan(&l.AdID, &l.Title, &l.URL, &price, &currency, &posted, &l.Kind,
-			&isTrader, &kpIzlog, &l.CPUModel, &l.CPUScore, &l.RAMGB, &l.SSDGB,
+			&desc, &seller, &isTrader, &kpIzlog, &isRenewed,
+			&sellerAds, &sellerTraderSeen, &sellerKPIzlogSeen, &reviews, &joined,
+			&l.CPUModel, &l.CPUScore, &l.RAMGB, &l.SSDGB,
 			&l.GPUModel, &l.GPUScore); err != nil {
 			return nil, err
 		}
 		l.Price = ToEUR(price, currency, rsdRate)
 		l.IsShop = isTrader != 0 || kpIzlog != 0
+		if !l.IsShop {
+			v := filters.L1(filters.AdFacts{
+				Title:             l.Title,
+				Description:       filters.StripHTML(desc),
+				Seller:            seller,
+				IsTrader:          isTrader != 0,
+				KPIzlog:           kpIzlog != 0,
+				IsRenewed:         isRenewed != 0,
+				SellerAds:         sellerAds,
+				SellerAgeDays:     sellerAgeDays(joined),
+				Reviews:           reviews,
+				SellerTraderSeen:  sellerTraderSeen != 0,
+				SellerKPIzlogSeen: sellerKPIzlogSeen != 0,
+			})
+			l.IsShop = v.Class == filters.ClassShop
+		}
 		if posted != "" {
 			if t, perr := time.Parse("2006-01-02 15:04:05", posted); perr == nil {
 				l.Posted = t
@@ -223,6 +254,17 @@ WHERE a.fetch_status IN ('SEARCH','OK')`)
 		out = append(out, l)
 	}
 	return out, rows.Err()
+}
+
+func sellerAgeDays(created string) int {
+	if created == "" {
+		return -1
+	}
+	t, err := time.Parse("2006-01-02 15:04:05", created)
+	if err != nil {
+		return -1
+	}
+	return int(time.Since(t).Hours() / 24)
 }
 
 // statsPool — лоты, участвующие в рыночной статистике (PLAN_v4 §3.5):
@@ -416,13 +458,24 @@ func medianAbsDev(vals []float64, med float64) float64 {
 // PriceEstimate — предсказание рыночной цены для лота по иерархии
 // K0 → K1 → K2 → гедоническая модель. Level: K0/K1/K2/K3/"".
 type PriceEstimate struct {
-	Median float64 // рыночная цена (медиана группы или предсказание OLS)
-	N      int     // размер опорной выборки
-	Level  string  // K0/K1/K2/K3; пусто — предсказать нечем
+	Median         float64 // рыночный ориентир после конкурентного потолка
+	RawMedian      float64 // сырая медиана группы или предсказание OLS до потолка
+	N              int     // размер опорной выборки
+	Level          string  // K0/K1/K2/K3; пусто — предсказать нечем
+	CompetitiveCap float64 // цена более мощного конкурента, если он ограничил ориентир
+	CapLot         *Lot    // лот, поставивший конкурентный потолок
 }
 
 // EstimateFor — рыночная цена конфигурации лота.
 func (m *Market) EstimateFor(l Lot) PriceEstimate {
+	return m.estimateFor(l, false)
+}
+
+func (e PriceEstimate) Capped() bool {
+	return e.RawMedian > 0 && e.CompetitiveCap > 0 && e.CompetitiveCap < e.RawMedian && e.CapLot != nil
+}
+
+func (m *Market) estimateFor(l Lot, leaveOneOut bool) PriceEstimate {
 	if l.CPUScore <= 0 {
 		return PriceEstimate{}
 	}
@@ -436,13 +489,86 @@ func (m *Market) EstimateFor(l Lot) PriceEstimate {
 		{m.groupKeyK2(l), "K2", minN_K2},
 	} {
 		if g, ok := m.groups[c.key]; ok && g.n >= c.minN {
-			return PriceEstimate{Median: g.median, N: g.n, Level: c.level}
+			prices := pricesOf(g.items)
+			if leaveOneOut {
+				prices = pricesExcluding(g.items, l.AdID)
+			}
+			if len(prices) < c.minN {
+				continue
+			}
+			med, n := robustMedian(prices)
+			if med <= 0 || n < c.minN {
+				continue
+			}
+			return m.withCompetitiveCap(l, PriceEstimate{Median: med, RawMedian: med, N: n, Level: c.level})
 		}
 	}
 	if m.hedonic != nil && m.hedonic.Usable {
-		return PriceEstimate{Median: m.hedonic.Predict(l), N: m.hedonic.N, Level: "K3"}
+		pred := m.hedonic.Predict(l)
+		if pred <= 0 {
+			return PriceEstimate{}
+		}
+		return m.withCompetitiveCap(l, PriceEstimate{Median: pred, RawMedian: pred, N: m.hedonic.N, Level: "K3"})
 	}
 	return PriceEstimate{}
+}
+
+func pricesExcluding(items []groupPrice, adID int64) []float64 {
+	out := make([]float64, 0, len(items))
+	for _, it := range items {
+		if it.adID == adID {
+			continue
+		}
+		out = append(out, it.price)
+	}
+	return out
+}
+
+const competitiveCapStrongerPct = 0.20
+
+// withCompetitiveCap не даёт медиане слабой конфигурации оторваться от живого
+// рынка: если в том же свежем частном пуле есть существенно более мощный лот
+// дешевле сырого ориентира, он становится верхней границей оценки.
+func (m *Market) withCompetitiveCap(target Lot, est PriceEstimate) PriceEstimate {
+	if est.Median <= 0 || target.Composite() <= 0 {
+		return est
+	}
+	capLot, ok := m.competitiveCapLot(target, est.Median)
+	if !ok {
+		return est
+	}
+	est.CompetitiveCap = capLot.Price
+	est.CapLot = &capLot
+	est.Median = capLot.Price
+	return est
+}
+
+func (m *Market) competitiveCapLot(target Lot, maxPrice float64) (Lot, bool) {
+	targetScore := target.Composite()
+	if targetScore <= 0 || maxPrice <= 0 {
+		return Lot{}, false
+	}
+	minScore := targetScore * (1 + competitiveCapStrongerPct)
+	var (
+		best Lot
+		ok   bool
+	)
+	windowDays := m.medianWindowDays
+	if windowDays <= 0 {
+		windowDays = 60
+	}
+	for _, l := range m.candidates(windowDays) {
+		if l.AdID == target.AdID || l.Price <= 0 || l.Price >= maxPrice {
+			continue
+		}
+		if l.Composite() < minScore {
+			continue
+		}
+		if !ok || l.Price < best.Price || (l.Price == best.Price && l.Composite() > best.Composite()) {
+			best, ok = l, true
+		}
+	}
+	return best, ok
 }
 
 // Deviation — отклонение цены лота от рыночной: price/median − 1.
@@ -455,46 +581,11 @@ func (m *Market) EstimateFor(l Lot) PriceEstimate {
 // понижается по иерархии. Для лотов вне датасета (живой бот) медиана
 // берётся целиком. NaN-защита: без оценки возвращает 0 и false.
 func (m *Market) Deviation(l Lot) (float64, bool) {
-	if l.CPUScore <= 0 {
+	est := m.estimateFor(l, true)
+	if est.Median <= 0 {
 		return 0, false
 	}
-	for _, c := range []struct {
-		key   string
-		level string
-		minN  int
-	}{
-		{m.groupKeyK0(l), "K0", minN_K0},
-		{m.groupKeyK1(l), "K1", minN_K1},
-		{m.groupKeyK2(l), "K2", minN_K2},
-	} {
-		g, ok := m.groups[c.key]
-		if !ok {
-			continue
-		}
-		prices := pricesOf(g.items)
-		for i, it := range g.items {
-			if it.adID == l.AdID {
-				prices = append(prices[:i], prices[i+1:]...)
-				break
-			}
-		}
-		if len(prices) < c.minN {
-			continue
-		}
-		med, _ := robustMedian(prices)
-		if med <= 0 {
-			return 0, false
-		}
-		return l.Price/med - 1, true
-	}
-	if m.hedonic != nil && m.hedonic.Usable {
-		pred := m.hedonic.Predict(l)
-		if pred <= 0 {
-			return 0, false
-		}
-		return l.Price/pred - 1, true
-	}
-	return 0, false
+	return l.Price/est.Median - 1, true
 }
 
 // Lots — все загруженные лоты (для альтернатив и отчётов).

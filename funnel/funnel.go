@@ -1,4 +1,4 @@
-﻿// Package funnel — детерминированная воронка L0–L5 (PLAN_v4, Фаза 4).
+// Package funnel — детерминированная воронка L0–L5 (PLAN_v4, Фаза 4).
 // Порядок строго «дёшево → дорого»: до Gemini доходят только лоты, не
 // отсечённые L0–L2 и не распознанные regex'ом (L3). Вердикт L5 собирается
 // из фактов, а не генерится моделью.
@@ -37,9 +37,9 @@ const (
 	vcJunk      = "JUNK"
 	vcSanity    = "SANITY"
 	vcNoMarket  = "NO_MARKET"
-	vcBanMac    = "BAN_MAC" // PLAN_v5: запрещённая линейка (MacBook)
-	vcNoGpu     = "NO_GPU"  // PLAN_v5: нет дискретной видеокарты
-	vcMoose     = "ЛОСЬ"    // PLAN_v7: железо добыто, но в данных KP не с чем сравнить
+	vcBanMac    = "BAN_MAC"        // PLAN_v5: запрещённая линейка (MacBook)
+	vcNoGpu     = "NO_GPU"         // PLAN_v5: нет дискретной видеокарты
+	vcMoose     = "RARE_NO_MARKET" // железо добыто, но в данных KP не с чем сравнить
 )
 
 // Funnel — рыночная модель + эталон железа под блокировкой чтения.
@@ -188,7 +188,7 @@ func manualAlertWorthy(priceEUR float64, minEUR int) bool {
 	return priceEUR >= float64(minEUR)
 }
 
-// mooseAlertWorthy — порог цены для ЛОСЬ-сводки (PLAN_v8): дешёвое редкое
+// mooseAlertWorthy — порог цены для сводки редкого железа (PLAN_v8): дешёвое редкое
 // железо без рыночной группы — шум, дешевле minEUR пишем только в аудит.
 func mooseAlertWorthy(priceEUR float64, minEUR int) bool {
 	return priceEUR >= float64(minEUR)
@@ -244,10 +244,17 @@ func Run(ctx context.Context, f *Funnel, cfg *config.Config, gem *vision.GeminiC
 	if serr != nil {
 		log.Warn("воронка: реестр продавцов", "user_id", ad.UserID, "err", serr)
 	}
+	reviews := int(detail.User.Reviews)
+	if seller.Reviews > reviews {
+		reviews = seller.Reviews
+	}
 	facts := filters.AdFacts{
 		Title: ad.Name, Description: descPlain, Seller: detail.Seller(),
 		Condition: detail.Condition, IsTrader: detail.IsTrader(), KPIzlog: detail.KPIzlog,
+		IsRenewed: ad.IsRenewed,
 		SellerAds: seller.AdsCount, SellerAgeDays: seller.AgeDays(),
+		Reviews: reviews, SellerTraderSeen: seller.TraderSeen,
+		SellerKPIzlogSeen: seller.KPIzlogSeen,
 	}
 	if v := filters.L1(facts); v.Class == filters.ClassShop {
 		bump("L1_SHOP")
@@ -335,16 +342,17 @@ func Run(ctx context.Context, f *Funnel, cfg *config.Config, gem *vision.GeminiC
 		}
 	}
 
-	// Ступени Gemini вызываются, пока не хватает CPU ИЛИ дискретной GPU
-	// (PLAN_v5 §3.4: для вердикта нужны оба). Если Gemini ответил
-	// «integrated» — эскалировать некуда, dGPU-гейт вынесет NO_GPU.
+	// Ступени Gemini вызываются, пока реально не хватает ИМЕНИ CPU или
+	// дискретной GPU. CPU, который regex уже назвал, но которого ещё нет в
+	// hw.db, не является поводом жечь Gemini: L5 умеет честно отправить такой
+	// лот в CHECK/RARE_NO_MARKET без баллов.
 	missing := func() bool {
-		return cpuScore <= 0 || (cfg.RequireDGPU && gpuModel == "" && !integratedGPU)
+		return cpuModel == "" || (cfg.RequireDGPU && gpuModel == "" && !integratedGPU)
 	}
 
 	if missing() {
-		tr.f("L3.2 Gemini-текст: regex не дал CPU или GPU — спрашиваю Gemini")
-		gs, prompt, raw, err := geminiTextSpecs(ctx, gem, ad.Name, descPlain, detail.Attributes)
+		tr.f("L3.2 Gemini-текст (%s): regex не дал CPU или GPU — спрашиваю Gemini", cfg.GeminiTextModel)
+		gs, prompt, raw, err := geminiTextSpecs(ctx, gem.WithModel(cfg.GeminiTextModel), ad.Name, descPlain, detail.Attributes)
 		bump("L3_GEMINI_TEXT")
 		tr.f("L3.2 запрос Gemini (промпт): %s", traceTrunc(prompt, 700))
 		if err != nil {
@@ -356,14 +364,14 @@ func Run(ctx context.Context, f *Funnel, cfg *config.Config, gem *vision.GeminiC
 		}
 	}
 	if missing() && len(detail.Photos) > 0 {
-		tr.f("L3.3 Gemini-фото: текста не хватило — отправляю %d фото", minInt(cfg.MaxPhotos, len(detail.Photos)))
+		tr.f("L3.3 Gemini-фото (%s): текста не хватило — отправляю %d фото", cfg.GeminiVisionModel, minInt(cfg.MaxPhotos, len(detail.Photos)))
 		for i, ph := range detail.Photos {
 			if i >= cfg.MaxPhotos {
 				break
 			}
 			tr.f("L3.3 фото %d: %s", i+1, ph.BestURL())
 		}
-		gs, note, raw, err := geminiPhotoSpecs(ctx, gem, ad.Name, descPlain, detail.Photos, cfg.MaxPhotos)
+		gs, note, raw, err := geminiPhotoSpecs(ctx, gem.WithModel(cfg.GeminiVisionModel), ad.Name, descPlain, detail.Photos, cfg.MaxPhotos)
 		bump("L3_GEMINI_PHOTO")
 		tr.f("L3.3 запрос Gemini (текстовая часть): %s", traceTrunc(note, 300))
 		if err != nil {
@@ -382,8 +390,8 @@ func Run(ctx context.Context, f *Funnel, cfg *config.Config, gem *vision.GeminiC
 	// Найденное валидируется merge'ом по hw.db (нет балла — не принято).
 	if cfg.WebResearch && laptopModel != "" && missing() {
 		bump("L3_INTERNET_SPECS")
-		tr.f("L3.4 интернет-спеки: модель %q известна, но CPU/GPU не хватает — ищу в интернете", laptopModel)
-		gs, prompt, raw, err := vision.ModelSpecsResearch(ctx, gem, laptopModel, ad.Name, "")
+		tr.f("L3.4 интернет-спеки (%s): модель %q известна, но CPU/GPU не хватает — ищу в интернете", cfg.GeminiSearchModel, laptopModel)
+		gs, prompt, raw, err := vision.ModelSpecsResearch(ctx, gem.WithModel(cfg.GeminiSearchModel), laptopModel, ad.Name, "")
 		tr.f("L3.4 запрос (промпт): %s", traceTrunc(prompt, 300))
 		if err != nil {
 			tr.f("L3.4 ошибка: %v", err)
@@ -483,8 +491,8 @@ func Run(ctx context.Context, f *Funnel, cfg *config.Config, gem *vision.GeminiC
 		stepUp = &stepUps[0]
 	}
 	if stepUp != nil {
-		tr.f("L5 шаг вверх: %q €%.0f (+€%.0f, +%.0f баллов)", stepUp.Title, stepUp.Price,
-			stepUp.Price-lot.Price, stepUp.Composite()-lot.Composite())
+		tr.f("L5 шаг вверх: %q €%.0f (+€%.0f, +%.0f баллов) %s", stepUp.Title, stepUp.Price,
+			stepUp.Price-lot.Price, stepUp.Composite()-lot.Composite(), stepUp.URL)
 	} else {
 		tr.f("L5 шаг вверх: мощнее и дороже на рынке не найдено")
 	}
@@ -510,7 +518,11 @@ func Run(ctx context.Context, f *Funnel, cfg *config.Config, gem *vision.GeminiC
 	altsJSON, _ := json.Marshal(alts)
 	marketRef := "в данных KP нет группы для сравнения"
 	if devOK {
-		marketRef = fmt.Sprintf("медиана=€%.0f (n=%d, %s)", est.Median, est.N, est.Level)
+		marketRef = fmt.Sprintf("ориентир=€%.0f (n=%d, %s)", est.Median, est.N, est.Level)
+		if est.Capped() && est.CapLot != nil {
+			marketRef = fmt.Sprintf("ориентир=€%.0f, сырой=€%.0f, потолок по более мощному лоту %d",
+				est.Median, est.RawMedian, est.CapLot.AdID)
+		}
 	}
 	audit := storage.FunnelVerdict{
 		Code: code, Deviation: dev, GroupN: est.N, Alternatives: string(altsJSON),
@@ -530,12 +542,12 @@ func Run(ctx context.Context, f *Funnel, cfg *config.Config, gem *vision.GeminiC
 	case vcMoose:
 		bump(code)
 		if !mooseAlertWorthy(priceEUR, cfg.MooseMinEUR) {
-			tr.f("ИТОГ: ЛОСЬ тихо — сравнить не с чем · цена %.0f€ < порога %d€ (время не тратим)",
+			tr.f("ИТОГ: RARE_NO_MARKET тихо — сравнить не с чем · цена %.0f€ < порога %d€ (время не тратим)",
 				priceEUR, cfg.MooseMinEUR)
 			flush()
 			return Outcome{Code: code, Status: models.StatusNoDeal, Audit: audit}
 		}
-		tr.f("ИТОГ: ЛОСЬ — редкое железо, сравнить не с чем → сводка в Telegram")
+		tr.f("ИТОГ: RARE_NO_MARKET — редкое железо, сравнить не с чем → сводка в Telegram")
 		flush()
 		text := mooseAlertText(ad, specsScore, lot, nuance)
 		return Outcome{Code: code, Status: models.StatusNeedCheck, AlertText: text, AlertURL: ad.URL(), Audit: audit}
@@ -802,8 +814,19 @@ func valueAlertText(code string, ad models.SearchAd, specsScore string, lot pric
 	fmt.Fprintf(&b, "Железо: %s\n", html.EscapeString(specsScore))
 	fmt.Fprintf(&b, "Мощность: %.0f баллов · %.0f баллов/€1000\n", lot.Composite(), lot.ValuePer1000())
 	fmt.Fprintf(&b, "Цена: <b>€%.0f</b>\n", lot.Price)
-	fmt.Fprintf(&b, "Средняя цена на такие (наши данные KP): €%.0f (n=%d) · отклонение <b>%.0f%%</b>\n",
-		est.Median, est.N, dev*100)
+	if est.Capped() && est.CapLot != nil {
+		fmt.Fprintf(&b, "Рыночный ориентир: €%.0f (сырая медиана €%.0f, n=%d; потолок по более мощному лоту)\n",
+			est.Median, est.RawMedian, est.N)
+		fmt.Fprintf(&b, "Контраргумент: %s · €%.0f · %.0f баллов\n",
+			html.EscapeString(truncateRunes(est.CapLot.Title, 80)), est.CapLot.Price, est.CapLot.Composite())
+		if est.CapLot.URL != "" {
+			fmt.Fprintf(&b, "↪ %s\n", html.EscapeString(est.CapLot.URL))
+		}
+		fmt.Fprintf(&b, "Отклонение: <b>%.0f%%</b>\n", dev*100)
+	} else {
+		fmt.Fprintf(&b, "Рыночный ориентир (наши данные KP): €%.0f (n=%d) · отклонение <b>%.0f%%</b>\n",
+			est.Median, est.N, dev*100)
+	}
 	if nuance != "" {
 		fmt.Fprintf(&b, "✅ Хороший, но с нюансом: %s\n", html.EscapeString(nuance))
 	}
@@ -817,6 +840,9 @@ func valueAlertText(code string, ad models.SearchAd, specsScore string, lot pric
 			stepUp.Price, dPrice, stepUp.Composite(), dComp, dComp/lot.Composite()*100)
 		fmt.Fprintf(&b, "· €%.0f за +1000 баллов (у этого лота %.0f баллов/€1000 против %.0f у шага)\n",
 			costPer1000, lot.ValuePer1000(), stepUp.ValuePer1000())
+		if stepUp.URL != "" {
+			fmt.Fprintf(&b, "↪ %s\n", html.EscapeString(stepUp.URL))
+		}
 	} else {
 		fmt.Fprintf(&b, "\nМощнее и дороже на рынке нет: %.0f баллов — максимум за свои деньги.\n", lot.Composite())
 	}
@@ -861,7 +887,15 @@ func checkAlertText(ad models.SearchAd, priceEUR float64, specsScore string,
 		b.WriteString("ℹ️ CPU нет в эталоне мощности: сверь поколение сам.\n")
 	}
 	if devOK {
-		fmt.Fprintf(&b, "Средняя цена на такие (наши данные KP): €%.0f (n=%d), отклонение %.0f%%\n", est.Median, est.N, dev*100)
+		if est.Capped() && est.CapLot != nil {
+			fmt.Fprintf(&b, "Рыночный ориентир: €%.0f (сырая медиана €%.0f, n=%d; потолок по более мощному лоту), отклонение %.0f%%\n",
+				est.Median, est.RawMedian, est.N, dev*100)
+			if est.CapLot.URL != "" {
+				fmt.Fprintf(&b, "Контраргумент: %s\n", html.EscapeString(est.CapLot.URL))
+			}
+		} else {
+			fmt.Fprintf(&b, "Рыночный ориентир (наши данные KP): €%.0f (n=%d), отклонение %.0f%%\n", est.Median, est.N, dev*100)
+		}
 	}
 	if nuance != "" {
 		fmt.Fprintf(&b, "Нюанс: %s\n", html.EscapeString(nuance))

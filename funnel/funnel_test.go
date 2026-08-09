@@ -1,4 +1,4 @@
-﻿package funnel
+package funnel
 
 import (
 	"strings"
@@ -75,7 +75,7 @@ func TestDecideL5(t *testing.T) {
 		{"сильно дороже → тихо", func(in *l5Input) { in.Dev = 0.25 }, vcExpensive},
 		{"нет CPU → вручную", func(in *l5Input) { in.CPUName = ""; in.CPUScore = 0 }, vcManual},
 		{"CPU назван, но без балла → проверка", func(in *l5Input) { in.CPUScore = 0 }, vcCheck},
-		{"железо есть, сравнивать не с чем → ЛОСЬ", func(in *l5Input) { in.DevOK = false }, vcMoose},
+		{"железо есть, сравнивать не с чем → RARE_NO_MARKET", func(in *l5Input) { in.DevOK = false }, vcMoose},
 	}
 	for _, c := range cases {
 		in := base

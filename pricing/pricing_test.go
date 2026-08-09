@@ -76,7 +76,7 @@ func TestRobustMedianDegenerate(t *testing.T) {
 // marketWith — синтетический рынок без SQLite: лоты уже «загружены».
 func marketWith(t *testing.T, lots []Lot, windowDays int) *Market {
 	t.Helper()
-	m := &Market{lots: lots, builtAt: time.Now()}
+	m := &Market{lots: lots, builtAt: time.Now(), medianWindowDays: windowDays}
 	m.buildGroups(windowDays)
 	return m
 }
@@ -350,6 +350,37 @@ func TestDeviationLeaveOneOutDropsLevel(t *testing.T) {
 	// Внешний лот: K2 n=5 ≥ порога → оценка есть.
 	if _, ok := m.Deviation(mkLot(999, "i5-1135G7", 10000, 16, 512, 300, 1)); !ok {
 		t.Fatal("внешний лот должен получить оценку по K2")
+	}
+}
+
+func TestCompetitiveCapPreventsWeakLaptopOverpricing(t *testing.T) {
+	var lots []Lot
+	for i := 0; i < 8; i++ {
+		lots = append(lots, mkLot(int64(i+1), "i5-old", 3000, 8, 256, 250, 1))
+	}
+	shopStronger := mkLot(50, "i7-new", 12000, 8, 256, 90, 1)
+	shopStronger.IsShop = true
+	lots = append(lots, shopStronger)
+	lots = append(lots, mkLot(51, "i7-new", 12000, 8, 256, 110, 1))
+
+	m := marketWith(t, lots, 60)
+	target := mkLot(999, "i5-old", 3000, 8, 256, 100, 0)
+
+	est := m.EstimateFor(target)
+	if !est.Capped() {
+		t.Fatalf("ожидал конкурентный потолок, получил %+v", est)
+	}
+	if est.RawMedian != 250 || est.Median != 110 {
+		t.Fatalf("оценка = raw %.0f / median %.0f, жду 250 / 110", est.RawMedian, est.Median)
+	}
+	if est.CapLot == nil || est.CapLot.AdID != 51 {
+		t.Fatalf("потолок должен поставить частный более мощный лот 51, got %+v", est.CapLot)
+	}
+
+	dev, ok := m.Deviation(target)
+	want := 100.0/110.0 - 1
+	if !ok || math.Abs(dev-want) > 1e-9 {
+		t.Fatalf("dev=%.4f ok=%v, жду %.4f", dev, ok, want)
 	}
 }
 

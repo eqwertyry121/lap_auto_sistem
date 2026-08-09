@@ -20,13 +20,27 @@ type GeminiClient struct {
 
 func NewGeminiClient(apiKey, model string) *GeminiClient {
 	if model == "" {
-		model = "gemini-flash-latest"
+		model = "gemini-2.5-flash-lite"
 	}
 	return &GeminiClient{
 		apiKey: apiKey,
 		model:  model,
 		http:   &http.Client{Timeout: 90 * time.Second},
 	}
+}
+
+func (g *GeminiClient) Model() string { return g.model }
+
+// WithModel возвращает лёгкую копию клиента с другой моделью и тем же
+// HTTP-клиентом. Это позволяет дешёвым L3-ступеням использовать Flash-Lite,
+// не размножая настройки ключа/таймаута.
+func (g *GeminiClient) WithModel(model string) *GeminiClient {
+	if g == nil || model == "" || model == g.model {
+		return g
+	}
+	cp := *g
+	cp.model = model
+	return &cp
 }
 
 // Part — текстовая или inline-изображение часть запроса.

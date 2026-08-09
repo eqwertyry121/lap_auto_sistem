@@ -9,7 +9,7 @@ var sellerSpamMarkers = []string{
 
 // Маркеры партий товара (проверяются по заголовку).
 var batchTitleMarkers = []string{
-	"na stanju", "komada", "lager", "veleprodaja", "maloprodaja",
+	"na stanju", "komada", "lager", "veleprodaja", "maloprodaja", "laptopovi",
 }
 
 // IsSpam отсеивает магазины и партии. Возвращает флаг и причину.

@@ -89,7 +89,7 @@ func main() {
 	}
 	log.Info("кандидаты выбраны", "лотов", len(cands), "бюджет", *budget)
 
-	gem := vision.NewGeminiClient(cfg.GeminiAPIKey, cfg.GeminiModel)
+	gem := vision.NewGeminiClient(cfg.GeminiAPIKey, cfg.GeminiTextModel)
 	var recognized, attempts int
 	for _, c := range cands {
 		if ctx.Err() != nil {

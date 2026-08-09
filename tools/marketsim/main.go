@@ -84,7 +84,7 @@ func main() {
 	fmt.Printf("\nОценка рынка: уровень=%s медиана/предсказание=%.0f€ n=%d\n",
 		orDash(est.Level), est.Median, est.N)
 	if !devOK {
-		fmt.Println("Отклонение: НЕТ (devOK=false) → воронка дала бы ЛОСЬ")
+		fmt.Println("Отклонение: НЕТ (devOK=false) → воронка дала бы RARE_NO_MARKET")
 		return
 	}
 	fmt.Printf("Отклонение: %+.0f%% (devOK=true) → воронка считала бы вердикт L5\n", dev*100)
