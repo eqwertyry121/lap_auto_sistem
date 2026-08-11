@@ -34,6 +34,9 @@ var (
 	ryzenRe = regexp.MustCompile(`(?i)\bryzen\s?([3579])\s?(pro\s?)?(\d{4}[a-z]{0,3})\b`)
 	// AMD shorthand from KP titles: «R7-7840HS», «R7 PRO 8845HS».
 	ryzenShortRe = regexp.MustCompile(`(?i)\br([3579])[-\s]?(pro[-\s]?)?(\d{4}[a-z]{0,3})\b`)
+	// AMD Ryzen AI: «Ryzen AI 7 PRO 350», «Ryzen AI 9 HX 370», «R7 AI 350 PRO».
+	ryzenAIRe      = regexp.MustCompile(`(?i)\bryzen\s+ai\s+([579])\s+(?:(hx)\s+)?(?:(pro)\s+)?(\d{3})\b`)
+	ryzenAIShortRe = regexp.MustCompile(`(?i)\br([579])\s+ai\s+(\d{3})\s*(pro)?\b`)
 
 	thinkPadGenRe = regexp.MustCompile(`(?i)\b(?:lenovo\s+)?thinkpad\s+([a-z]\d{1,3}s?)\s*(?:gen(?:eration)?|g)\s*([0-9]{1,2})\b`)
 	lenovoMTMRe   = regexp.MustCompile(`(?i)\b(2[0-9a-z]{9})\b`)
@@ -49,6 +52,12 @@ func ExtractCPU(text string) string {
 	}
 	if m := ultraShortRe.FindStringSubmatch(text); m != nil {
 		return formatUltraCPU(m[1], m[2])
+	}
+	if m := ryzenAIRe.FindStringSubmatch(text); m != nil {
+		return formatRyzenAICPU(m[1], m[2], m[3], m[4])
+	}
+	if m := ryzenAIShortRe.FindStringSubmatch(text); m != nil {
+		return formatRyzenAICPU(m[1], "", m[3], m[2])
 	}
 	if m := ryzenRe.FindStringSubmatch(text); m != nil {
 		return formatRyzenCPU(m[1], m[2], m[3])
@@ -67,6 +76,17 @@ func formatUltraCPU(class, model string) string {
 
 func formatRyzenCPU(class, pro, model string) string {
 	out := "Ryzen " + class + " "
+	if strings.TrimSpace(pro) != "" {
+		out += "PRO "
+	}
+	return out + strings.ToUpper(model)
+}
+
+func formatRyzenAICPU(class, hx, pro, model string) string {
+	out := "Ryzen AI " + class + " "
+	if strings.TrimSpace(hx) != "" {
+		out += "HX "
+	}
 	if strings.TrimSpace(pro) != "" {
 		out += "PRO "
 	}

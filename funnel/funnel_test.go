@@ -202,6 +202,11 @@ func TestMatchCPUFallsBackFromRyzenProToBaseSKU(t *testing.T) {
 	if name != "AMD Ryzen 7 8840U" || score != 14125 {
 		t.Fatalf("PRO fallback match = %q %.0f", name, score)
 	}
+	cpus[hw.Key("AMD Ryzen AI 7 350")] = hw.CPU{Name: "AMD Ryzen AI 7 350", Score: 15016}
+	name, score = matchCPU(cpus, "Ryzen AI 7 PRO 350")
+	if name != "AMD Ryzen AI 7 350" || score != 15016 {
+		t.Fatalf("Ryzen AI PRO fallback match = %q %.0f", name, score)
+	}
 }
 
 func TestGeminiPhotoPromptKeepsKnownModelHint(t *testing.T) {

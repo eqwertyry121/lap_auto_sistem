@@ -19,6 +19,11 @@ func TestExtractCPU(t *testing.T) {
 		{"HP EliteBook 855 G8 Ryzen 7 PRO 5850u 8c/16t", "Ryzen 7 PRO 5850U"},
 		{"HP Victus / 4070 / R7-7840HS / 32GB", "Ryzen 7 7840HS"},
 		{"Lenovo Yoga Pro 7 R7 PRO 8845HS 16G/1T", "Ryzen 7 PRO 8845HS"},
+		{"NOV NEOTPAKOVAN Lenovo T14 GEN 6 - Ryzen AI 7 PRO 350", "Ryzen AI 7 PRO 350"},
+		{"ASUS ProArt H7606GM-SR009XOA Ryzen AI 9 465/RTX 5060", "Ryzen AI 9 465"},
+		{"ASUS ROG Zephyrus G14 AMD Ryzen AI 9 HX 370 RTX 5060", "Ryzen AI 9 HX 370"},
+		{"HP Elitebook 8 G1a 14- R7 AI 350 PRO, 32GB", "Ryzen AI 7 PRO 350"},
+		{"ASUS Vivobook S16 M3607KA-SH091W Ryzen AI 5 330", "Ryzen AI 5 330"},
 		{"HP ZBook Studio Ultra 7 155H 32GB 1TB", "Ultra 7 155H"},
 		// PLAN_v5: каталожный формат магазинов + плюс-варианты.
 		{"LENOVO Legion Pro 7 Intel Core Ultra 9 Processor 290HX Plus RTX 5090", "Ultra 9 290HX Plus"},
