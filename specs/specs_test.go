@@ -51,6 +51,20 @@ func TestExtractExactModelCode(t *testing.T) {
 	}
 }
 
+func TestLookupExactModelSpecs(t *testing.T) {
+	gs, ok := LookupExactModelSpecs("Lenovo ThinkPad E14 Gen 6 (21M3003PCX)")
+	if !ok {
+		t.Fatal("expected exact MTM catalog match")
+	}
+	if gs.LaptopModel != "Lenovo ThinkPad E14 Gen 6 21M3003PCX" ||
+		gs.CPU != "Ryzen 7 7735HS" || gs.RAMGB != 16 || gs.SSDGB != 512 || !gs.GPUIntegrated() {
+		t.Fatalf("catalog specs = %+v", gs)
+	}
+	if _, ok := LookupExactModelSpecs("Lenovo ThinkPad E14 Gen 6 Ryzen 7 16GB 512GB"); ok {
+		t.Fatal("family-only model must not match exact catalog")
+	}
+}
+
 func TestExtractGPU(t *testing.T) {
 	cases := []struct{ text, want string }{
 		{"Acer Predator Helios Neo 16 i7-13700HX/32GB DDR5/1TB/RTX4060", "RTX 4060"},
@@ -133,7 +147,11 @@ func TestParseGeminiSpecs_WhyNoCPU(t *testing.T) {
 }
 
 func TestGPUIntegrated_Variants(t *testing.T) {
-	for _, v := range []string{"integrated", "встроенная", "Встроенная видеокарта", "встройка"} {
+	for _, v := range []string{
+		"integrated", "integrated graphics", "integrisana grafika",
+		"встроенная", "Встроенная видеокарта", "встройка",
+		"AMD Radeon 680M Graphics", "Intel Iris Xe", "Intel UHD Graphics",
+	} {
 		gs := GeminiSpecs{GPU: v}
 		if !gs.GPUIntegrated() {
 			t.Errorf("%q должен считаться встроенным", v)

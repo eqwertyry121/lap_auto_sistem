@@ -177,6 +177,17 @@ func TestWithoutProductionOLSKeepsAlternatives(t *testing.T) {
 	}
 }
 
+func TestDiamondSuppressionAllowsKnownIntegratedGPU(t *testing.T) {
+	got := diamondSuppressionReason(pricing.PriceEstimate{Level: "K0"}, 0, true, "used", true)
+	if got != "" {
+		t.Fatalf("known integrated GPU must not be suppressed as unknown GPU: %q", got)
+	}
+	got = diamondSuppressionReason(pricing.PriceEstimate{Level: "K0"}, 0, false, "used", true)
+	if !strings.Contains(got, "unknown GPU score") {
+		t.Fatalf("unknown GPU must still suppress diamond, got %q", got)
+	}
+}
+
 func TestValueAlertTextSeparatesComparableMarketAndCeiling(t *testing.T) {
 	stronger := pricing.Lot{
 		AdID: 2, Title: "Stronger Lenovo", URL: "https://example.test/stronger",
@@ -254,6 +265,28 @@ func TestSpecSourceTokensAreExact(t *testing.T) {
 	}
 	if !hasSpecSource(source, "gemini-photo-all") || !hasSpecSource(source, "gemini-search") {
 		t.Fatalf("%q source tokens not detected", source)
+	}
+}
+
+func TestCachedModelCatalogSpecsAreTrusted(t *testing.T) {
+	dbPath := newSpecsCacheDB(t)
+	ctx := context.Background()
+
+	if err := saveCachedGeminiSpecs(ctx, dbPath, 202, "model-catalog", specs.GeminiSpecs{
+		CPU: "Ryzen 7 7735HS", RAMGB: 16, SSDGB: 512, GPU: "integrated",
+	}, nil, nil); err != nil {
+		t.Fatal(err)
+	}
+
+	got, source, ok := loadCachedGeminiSpecs(ctx, dbPath, 202)
+	if !ok {
+		t.Fatal("model-catalog specs must be loaded as trusted cache")
+	}
+	if got.CPU != "Ryzen 7 7735HS" || got.RAMGB != 16 || got.SSDGB != 512 || !got.GPUIntegrated() {
+		t.Fatalf("cached catalog specs = %+v", got)
+	}
+	if source != "model-catalog" {
+		t.Fatalf("source = %q, want model-catalog", source)
 	}
 }
 

@@ -21,7 +21,7 @@ KP Search API
   -> storage durable queue
   -> KP detail fetch
   -> L0/L1/L2 deterministic filters
-  -> specs extraction: regex -> text -> all photos -> exact model research
+  -> specs extraction: regex -> exact model catalog -> text -> all photos -> exact model research
   -> market evaluation
   -> Telegram outbox
 ```
@@ -33,7 +33,7 @@ Main blocks:
 - `storage/` - SQLite schema, migrations, durable process states, listing observations,
   Telegram outbox, backups.
 - `filters/` - deterministic L1 shop/reseller filter and L2 junk/defect filter.
-- `specs/` and `hw/` - deterministic parsing and hardware benchmark lookup.
+- `specs/` and `hw/` - deterministic parsing, exact model catalog, and hardware benchmark lookup.
 - `vision/` - Gemini client with Flash-Lite defaults, retry/cooldown, token/cost stats.
 - `pricing/` - market loading, comparable groups, Pareto/step-up suppression, value logic.
 - `funnel/` - full L0-L5 decision pipeline and Telegram alert text.

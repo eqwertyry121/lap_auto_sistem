@@ -242,12 +242,12 @@ func withoutProductionOLS(eval pricing.MarketEvaluation) (pricing.MarketEvaluati
 	return eval, true
 }
 
-func diamondSuppressionReason(est pricing.PriceEstimate, gpuScore float64, condition string, sellerFound bool) string {
+func diamondSuppressionReason(est pricing.PriceEstimate, gpuScore float64, integratedGPU bool, condition string, sellerFound bool) string {
 	var reasons []string
 	if est.Level == "K3" {
 		reasons = append(reasons, "K3/OLS price estimate")
 	}
-	if gpuScore <= 0 {
+	if gpuScore <= 0 && !integratedGPU {
 		reasons = append(reasons, "unknown GPU score")
 	}
 	if strings.TrimSpace(condition) == "" {
@@ -411,6 +411,15 @@ func Run(ctx context.Context, f *Funnel, cfg *config.Config, gem *vision.GeminiC
 		}
 		if recognized.SSDGB == 0 {
 			recognized.SSDGB = gs.SSDGB
+		}
+	}
+
+	if gs, ok := specs.LookupExactModelSpecs(ad.Name + " " + descPlain + " " + laptopModel); ok {
+		bump("L3_MODEL_CATALOG")
+		tr.f("L3.1 model-catalog: exact MTM matched %s", gs.LaptopModel)
+		merge("L3.1 model-catalog", "model-catalog", gs)
+		if err := saveCachedGeminiSpecs(ctx, cfg.ResearchDBPath, ad.AdID, "model-catalog", gs, cpus, gpus); err != nil {
+			log.Warn("воронка: cache model-catalog specs", "ad_id", ad.AdID, "err", err)
 		}
 	}
 
@@ -642,7 +651,7 @@ func Run(ctx context.Context, f *Funnel, cfg *config.Config, gem *vision.GeminiC
 
 	diamondSuppressedReason := ""
 	if code == vcDiamond || code == vcSuspect {
-		diamondSuppressedReason = diamondSuppressionReason(est, gpuScore, detail.Condition, seller.Found)
+		diamondSuppressedReason = diamondSuppressionReason(est, gpuScore, integratedGPU, detail.Condition, seller.Found)
 		if diamondSuppressedReason != "" {
 			code = vcSuppressed
 			tr.f("L5 anti-diamond: suppressed because %s", diamondSuppressedReason)
@@ -843,7 +852,7 @@ func loadCachedGeminiSpecs(ctx context.Context, dbPath string, adID int64) (spec
 	err = db.QueryRowContext(ctx, `
 SELECT COALESCE(cpu_model,''), COALESCE(ram_gb,0), COALESCE(ssd_gb,0), COALESCE(gpu_model,''), COALESCE(source,'')
 FROM research_specs
-WHERE ad_id=? AND source LIKE '%gemini%'
+WHERE ad_id=? AND (source LIKE '%gemini%' OR source LIKE '%model-catalog%')
 LIMIT 1`, adID).Scan(&gs.CPU, &gs.RAMGB, &gs.SSDGB, &gs.GPU, &source)
 	if err != nil {
 		return specs.GeminiSpecs{}, "", false

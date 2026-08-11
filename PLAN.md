@@ -151,7 +151,7 @@ Defaults:
 - Cache merges partial results; later stages must not wipe earlier fields.
 
 Field provenance must remain visible through source labels such as `regex`,
-`gemini-text`, `gemini-photo-all`, and `gemini-search`.
+`model-catalog`, `gemini-text`, `gemini-photo-all`, and `gemini-search`.
 
 ## P2 Stability
 

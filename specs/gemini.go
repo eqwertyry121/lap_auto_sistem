@@ -26,9 +26,20 @@ func (s GeminiSpecs) Empty() bool {
 // Такие ответы в ценовые группы не попадают (встройка не удорожает лот),
 // но показываются в строке конфигурации и ресерче.
 func (s GeminiSpecs) GPUIntegrated() bool {
-	switch strings.ToLower(strings.TrimSpace(s.GPU)) {
-	case "integrated", "встроенная", "встроенная видеокарта", "встройка":
+	g := strings.ToLower(strings.TrimSpace(s.GPU))
+	switch g {
+	case "integrated", "integrated graphics", "integrisana", "integrisana grafika",
+		"встроенная", "встроенная видеокарта", "встройка":
 		return true
+	}
+	for _, marker := range []string{
+		"intel hd", "intel uhd", "intel iris", "iris xe",
+		"amd radeon graphics", "radeon graphics", "radeon 610m", "radeon 660m",
+		"radeon 680m", "radeon 760m", "radeon 780m", "radeon 880m", "radeon 890m",
+	} {
+		if strings.Contains(g, marker) {
+			return true
+		}
 	}
 	return false
 }
