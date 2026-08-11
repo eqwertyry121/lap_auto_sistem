@@ -201,8 +201,11 @@ func writeBack(ctx context.Context, db *sql.DB, adID int64, sp geminiSpecs,
 	}
 	cpuModel, cpuScore := strings.TrimSpace(sp.CPU), 0.0
 	if cpuModel != "" {
-		if c, ok := cpus[hw.Key(cpuModel)]; ok {
-			cpuModel, cpuScore = c.Name, c.Score
+		for _, key := range cpuLookupKeys(cpuModel) {
+			if c, ok := cpus[key]; ok {
+				cpuModel, cpuScore = c.Name, c.Score
+				break
+			}
 		}
 	}
 	gpuModel, gpuScore := strings.TrimSpace(sp.GPU), 0.0
@@ -222,9 +225,23 @@ ON CONFLICT(ad_id) DO UPDATE SET
 	ssd_gb=CASE WHEN excluded.ssd_gb > 0 THEN excluded.ssd_gb ELSE research_specs.ssd_gb END,
 	gpu_model=CASE WHEN excluded.gpu_model != '' THEN excluded.gpu_model ELSE research_specs.gpu_model END,
 	gpu_score=CASE WHEN excluded.gpu_model != '' THEN excluded.gpu_score ELSE research_specs.gpu_score END,
-	updated_at=excluded.updated_at, source=excluded.source`,
+	updated_at=excluded.updated_at,
+	source=CASE
+		WHEN instr('+' || research_specs.source || '+', '+' || excluded.source || '+') > 0 THEN research_specs.source
+		WHEN research_specs.source = '' THEN excluded.source
+		ELSE excluded.source || '+' || research_specs.source
+	END`,
 		adID, strings.TrimSpace(sp.LaptopModel), cpuModel, cpuScore, sp.RAMGB, sp.SSDGB, gpuModel, gpuScore, time.Now().Unix())
 	return err
+}
+
+func cpuLookupKeys(name string) []string {
+	key := hw.Key(name)
+	keys := []string{key}
+	if fallback := strings.Replace(key, " pro ", " ", 1); fallback != key {
+		keys = append(keys, fallback)
+	}
+	return keys
 }
 
 func ensureResearchSpecsLaptopModelColumn(ctx context.Context, db *sql.DB) error {

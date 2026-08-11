@@ -6,6 +6,8 @@ import (
 	"path/filepath"
 	"testing"
 
+	"kpbot/hw"
+
 	_ "modernc.org/sqlite"
 )
 
@@ -115,7 +117,45 @@ SELECT laptop_model, cpu_model, ram_gb, ssd_gb, gpu_model, source FROM research_
 		Scan(&laptopModel, &cpu, &ram, &ssd, &gpu, &source); err != nil {
 		t.Fatal(err)
 	}
-	if laptopModel != "Fujitsu Celsius H7510" || cpu != "i7-10850H" || ram != 32 || ssd != 512 || gpu != "NVIDIA Quadro T1000" || source != "gemini-text" {
+	if laptopModel != "Fujitsu Celsius H7510" || cpu != "i7-10850H" || ram != 32 || ssd != 512 || gpu != "NVIDIA Quadro T1000" || source != "gemini-text+regex" {
 		t.Fatalf("merged row = model=%q cpu=%q ram=%d ssd=%d gpu=%q source=%q", laptopModel, cpu, ram, ssd, gpu, source)
+	}
+}
+
+func TestWriteBackMatchesRyzenProAlias(t *testing.T) {
+	db, err := sql.Open("sqlite", filepath.Join(t.TempDir(), "test.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	if _, err := db.Exec(`
+CREATE TABLE research_specs (
+	ad_id INTEGER PRIMARY KEY,
+	cpu_model TEXT NOT NULL DEFAULT '',
+	cpu_score REAL NOT NULL DEFAULT 0,
+	ram_gb INTEGER NOT NULL DEFAULT 0,
+	ssd_gb INTEGER NOT NULL DEFAULT 0,
+	gpu_model TEXT NOT NULL DEFAULT '',
+	gpu_score REAL NOT NULL DEFAULT 0,
+	updated_at INTEGER NOT NULL DEFAULT 0,
+	source TEXT NOT NULL DEFAULT 'regex'
+);`); err != nil {
+		t.Fatal(err)
+	}
+
+	cpus := map[string]hw.CPU{
+		hw.Key("AMD Ryzen 7 8840U"): {Name: "AMD Ryzen 7 8840U", Score: 14125},
+	}
+	if err := writeBack(context.Background(), db, 11, geminiSpecs{CPU: "Ryzen 7 PRO 8840U"}, cpus, nil); err != nil {
+		t.Fatal(err)
+	}
+
+	var cpu, source string
+	var score float64
+	if err := db.QueryRow(`SELECT cpu_model, cpu_score, source FROM research_specs WHERE ad_id=11`).Scan(&cpu, &score, &source); err != nil {
+		t.Fatal(err)
+	}
+	if cpu != "AMD Ryzen 7 8840U" || score != 14125 || source != "gemini-text" {
+		t.Fatalf("writeBack cpu=%q score=%.0f source=%q", cpu, score, source)
 	}
 }
