@@ -1,162 +1,167 @@
 # KP Laptop Arbitrage Bot
 
-Бот на **Go** мониторит категорию «Ноутбуки» на **KupujemProdajem** (KP), находит
-недооценённые лоты с помощью **Gemini (Text + Vision)** и мгновенно шлёт алерты в
-**Telegram**. Рыночная база копится в **SQLite** и батчами выгружается в
-**CSV-файл** (`data/market_history.csv`) — открывается в Excel/Google Sheets.
+Go bot for monitoring laptop listings on KupujemProdajem, enriching hardware specs,
+comparing each listing against the local KP market dataset, and sending only
+actionable Telegram alerts.
 
-Полное ТЗ и архитектура — в [`PLAN.md`](PLAN.md).
+The project is intentionally local-first:
 
-> ⚠️ Авто-сообщения продавцам (Reply Worker) сознательно **вне MVP** — вся переписка
-> ведётся вручную по ссылке из Telegram.
+- SQLite is the runtime storage.
+- `data/research.db` is the market dataset used for comparable prices.
+- Gemini is used only to extract/confirm hardware specs, not to decide whether a
+  listing is profitable.
+- Telegram delivery is handled through a DB outbox so alerts survive restarts.
 
----
+Canonical implementation plan: [PLAN.md](PLAN.md).
 
-## Возможности
+## Architecture
 
-- **Сканер рынка** (`cmd/market-scan`) — обходит всю выдачу категории и собирает
-  рыночную базу (заголовок, цена, валюта, ссылка) в SQLite.
-- **Живой мониторинг** — каждые `POLL_INTERVAL_SEC` секунд забирает свежие объявления,
-  дедуплицирует по `ad_id`, отсеивает магазины/партии, запрашивает детали (`/eds/{id}`).
-- **Двухфазная оценка Gemini**:
-  - Фаза 1 — текст (заголовок + описание + характеристики + рыночная сводка из кэша цен).
-  - Фаза 2 — Vision (все фото объявления), если модель не определена по тексту.
-  - Строгие правила квалификации CPU (без точной модели/поколения `is_deal` не ставится).
-- **Кэш рыночных цен** в памяти (обновляется каждые 30 мин из SQLite) — даёт Gemini
-  «медиана/диапазон похожих лотов».
-- **Telegram**: `🚀 НАЙДЕН ПРОФИТ` и `⚠️ ТРЕБУЕТСЯ ПРОВЕРКА` с inline-кнопкой на объявление.
-- **CSV-экспорт**: фоновый батч-экспортёр раз в `EXPORT_INTERVAL_MIN` дописывает
-  до 500 новых строк в `data/market_history.csv` (Дата, Заголовок, Цена, Валюта,
-  Ссылка). Без внешних API и ключей, файл открывается в Excel/Google Sheets.
-
----
-
-## Быстрый старт
-
-### 1. Зависимости
-
-- Go ≥ 1.25
-- (опционально) Docker — если позже захотите PostgreSQL вместо SQLite
-
-### 2. Установка
-
-```bash
-cd the_bot_god_of_laptop
-cp .env.example .env        # Windows: copy .env.example .env
+```text
+KP Search API
+  -> storage durable queue
+  -> KP detail fetch
+  -> L0/L1/L2 deterministic filters
+  -> specs extraction: regex -> text -> all photos -> exact model research
+  -> market evaluation
+  -> Telegram outbox
 ```
 
-Заполните `.env` (см. ниже). Минимально для запуска нужны `GEMINI_API_KEY` и
-`TELEGRAM_BOT_TOKEN` + `TELEGRAM_CHAT_ID`.
+Main blocks:
 
-### 3. Собрать рыночную базу (один раз)
+- `main.go` - live process, workers, startup checks, singleton lock, graceful shutdown.
+- `collector/` - KP API client, search/detail requests, shared KP cooldown.
+- `storage/` - SQLite schema, migrations, durable process states, listing observations,
+  Telegram outbox, backups.
+- `filters/` - deterministic L1 shop/reseller filter and L2 junk/defect filter.
+- `specs/` and `hw/` - deterministic parsing and hardware benchmark lookup.
+- `vision/` - Gemini client with Flash-Lite defaults, retry/cooldown, token/cost stats.
+- `pricing/` - market loading, comparable groups, Pareto/step-up suppression, value logic.
+- `funnel/` - full L0-L5 decision pipeline and Telegram alert text.
+- `control/` - Telegram control panel.
+- `cmd/research` - market dataset collector.
+- `cmd/label` - manual seller/ad labeling workflow.
+- `tools/` - diagnostics and one-off maintenance utilities.
 
-```bash
-go run ./cmd/market-scan                 # до конца выдачи (~800 страниц)
-# или пробный прогон:
-go run ./cmd/market-scan -max-pages 10
+## Decision Rules
+
+The bot no longer treats a global median as "average price for this laptop".
+Alerts separate:
+
+- comparable KP median,
+- lower quartile,
+- rational price ceiling from stronger alternatives,
+- confidence level,
+- normalized performance index.
+
+Diamond alerts are suppressed when a clean private alternative dominates the
+candidate or a much better step-up exists for nearly the same money. Step-up
+alerts must include the alternative link.
+
+Production decisions do not use OLS/K3 estimates. Those remain available only
+for analysis until a real backtest exists.
+
+## Manual Labels
+
+Use manual labels to tighten the seller/shop filter without changing code:
+
+```powershell
+go run ./cmd/label -db data/research.db -export-top 50 -out data/labels_review.csv
+go run ./cmd/label -db data/research.db -export-random 50 -out data/labels_private.csv
+go run ./cmd/label -db data/research.db -import data/labels_review.csv
+go run ./cmd/label -db data/research.db -show
 ```
 
-Сканер устойчив к 429 (бэкофф), идемпотентен (дедуп по `ad_id`) и пишет в `data/kp_bot.db`.
+Supported labels:
 
-### 4. Запустить бота
+- `seller` target: `SHOP` or `PRIVATE`.
+- `ad` target: `JUNK`, `CLEAN`, `DEFECT`, `PARTS_ONLY`.
 
-```bash
+Runtime uses these labels in the funnel. `SHOP` cuts a seller immediately.
+`PRIVATE` bypasses behavioral heuristics, but does not override current KP
+`Trgovac` / `KP Izlog` evidence. `JUNK` cuts an ad immediately. `CLEAN`
+overrides text junk markers, but not official `condition=broken`.
+
+## Quick Start
+
+```powershell
+copy .env.example .env
 go run .
 ```
 
-Бот стартует, начнёт опрос KP и будет слать алерты в Telegram.
-`Ctrl+C` — корректная остановка (graceful shutdown).
+Minimum production configuration needs:
 
----
+- `GEMINI_API_KEY`
+- `TELEGRAM_BOT_TOKEN`
+- `TELEGRAM_CHAT_ID`
 
-## Переменные окружения (.env)
+If Telegram variables are absent, alerts are printed to the console.
 
-| Переменная | По умолчанию | Описание |
-|---|---|---|
-| `POLL_INTERVAL_SEC` | `45` | период опроса Search API |
-| `DB_PATH` | `data/kp_bot.db` | файл SQLite (SSOT) |
-| `DB_BACKUP_DIR` | `data/backups` | daily SQLite backups via `VACUUM INTO` |
-| `FETCH_DELAY_MS` | `700` | пауза между запросами `/eds/{id}` |
-| `GEMINI_API_KEY` | — | **обязателен** для оценки |
-| `GEMINI_MODEL` | `gemini-2.5-flash-lite` | базовая модель Gemini |
-| `GEMINI_LITE_MODEL` | `gemini-2.5-flash-lite` | лёгкая модель для text/vision/search-ступеней |
-| `GEMINI_CONCURRENCY` | `5` | лимит параллельных вызовов Gemini |
-| `GEMINI_DAILY_LIMIT` | `80` | дневной лимит вызовов Gemini; `0` явно снимает лимит |
-| `TELEGRAM_BOT_TOKEN` | — | токен бота (`@BotFather`) |
-| `TELEGRAM_CHAT_ID` | — | id чата/канала для алертов |
-| `CSV_PATH` | `data/market_history.csv` | файл CSV-экспорта рыночной базы |
-| `EXPORT_INTERVAL_MIN` | `30` | период батч-экспорта |
-| `LOCK_PATH` | `data/kpbot.lock` | singleton-lock, чтобы не запустить два экземпляра бота |
-| `KP_COOLDOWN_PATH` | `data/kp_cooldown` | общий cooldown bot/research после KP 429/challenge |
-| `KP_RATE_COOLDOWN_SEC` | `90` | длительность общего cooldown после KP 429 |
-| `KP_CHALLENGE_COOLDOWN_MIN` | `30` | длительность общего cooldown после KP anti-bot challenge |
-| `KP_WATCHDOG_RESEARCH` | `0` | `1` включает watchdog для `research.exe`; по умолчанию watchdog следит только за ботом |
+## Important Configuration
 
-Если `TELEGRAM_*` не заданы — алерты печатаются в консоль (dry-run).
-CSV-экспорт работает всегда и не требует настройки (путь — `CSV_PATH`).
+| Variable | Default | Purpose |
+|---|---:|---|
+| `POLL_INTERVAL_SEC` | `45` | KP search polling interval |
+| `DB_PATH` | `data/kp_bot.db` | live bot SQLite DB |
+| `RESEARCH_DB_PATH` | `data/research.db` | market dataset SQLite DB |
+| `DB_BACKUP_DIR` | `data/backups` | daily SQLite backups |
+| `FETCH_DELAY_MS` | `700` | delay between KP detail requests |
+| `GEMINI_MODEL` | `gemini-2.5-flash-lite` | base Gemini model |
+| `GEMINI_TEXT_MODEL` | `gemini-2.5-flash-lite` | text extraction model |
+| `GEMINI_VISION_MODEL` | `gemini-2.5-flash-lite` | photo extraction model |
+| `GEMINI_SEARCH_MODEL` | `gemini-2.5-flash-lite` | exact model research model |
+| `GEMINI_CONCURRENCY` | `5` | Gemini parallel request limit |
+| `GEMINI_DAILY_LIMIT` | `80` | daily Gemini call limit, `0` disables it |
+| `MARKET_REFRESH_MIN` | `360` | market model refresh period |
+| `DIAMOND_DEV_PCT` | `-15` | diamond threshold vs decision reference |
+| `SUSPECT_DEV_PCT` | `-40` | bait-risk threshold |
+| `DIAMOND_MIN_N` | `5` | minimum comparable group size |
+| `REQUIRE_DGPU` | `1` | ignore laptops without discrete GPU |
+| `WEB_RESEARCH` | `1` | exact model/SKU hardware lookup |
+| `MANUAL_MIN_EUR` | `400` | manual-review alert minimum |
+| `MOOSE_MIN_EUR` | `400` | rare-hardware summary minimum |
+| `LOCK_PATH` | `data/kpbot.lock` | singleton process lock |
+| `KP_COOLDOWN_PATH` | `data/kp_cooldown` | shared KP cooldown file |
+| `KP_WATCHDOG_RESEARCH` | `0` | watchdog does not start research by default |
 
----
+Config is validated on startup. Invalid intervals, invalid booleans, empty model
+names, bad thresholds, and half-configured Telegram credentials fail fast.
 
-## Структура проекта
+## Market Dataset
 
-```
-├── main.go                  # связка: воркеры, циклы, graceful shutdown
-├── cmd/market-scan/         # разовый/периодический сбор всей рыночной базы
-├── config/config.go         # конфигурация из .env
-├── models/models.go         # SearchAd, SearchResults, AdDetail, Listing, Verdict
-├── collector/
-│   ├── client.go            # HTTP-клиент KP + подпись x-kp-signature (SHA1)
-│   ├── poller.go            # Search API (по страницам)
-│   ├── fetcher.go           # /eds/{ad_id}
-│   ├── spam.go              # фильтр магазинов/партий
-│   ├── signature_test.go    # регрессия подписи (эталоны из живого API)
-│   └── live_test.go         # live-тест реального KP API (go test -tags live)
-├── storage/
-│   ├── db.go                # SQLite: market_listings, дедуп, статусы
-│   └── pricecache.go        # кэш рыночных цен + сводка для промпта
-├── vision/
-│   ├── gemini.go            # REST-клиент Gemini (generateContent, inline images)
-│   └── evaluator.go         # двухфазная оценка, промпт с правилами CPU
-├── notifier/telegram.go     # ALERT / NEED CHECK + inline-кнопка
-└── exporter/csv.go          # батчная дозапись рыночной истории в CSV
+Refresh the research dataset separately from the live bot:
+
+```powershell
+go run ./cmd/research -db data/research.db
 ```
 
----
+The live process uses `data/research.db` as read-mostly market context and
+records lightweight seller/ad observations through the normal runtime path.
+The current design still has two SQLite databases; `DB_PATH` is the source of
+truth for live processing, while `RESEARCH_DB_PATH` is the market and labeling
+dataset.
 
-## Важные технические детали
+## Tests
 
-### Авторизация KP API
-Эндпоинты `api/web/v1/*` требуют заголовок **`x-kp-signature`** — SHA1 от
-`полный путь + query + тело + соль` (соль восстановлена из JS-бандла KP). Куки
-**не нужны**. Реализация — в `collector/client.go`, регрессионные тесты — в
-`collector/signature_test.go`. Без подписи API отвечает `401 not_authorized`.
-
-### Рейт-лимиты KP
-- Сканер и поллер делают паузы между запросами и откатываются при `429`
-  (бэкофф 30/60/90 c, до 3 повторов подряд).
-- Тяжёлый `/eds/{id}` вызывается **только для новых** `ad_id`.
-
-### Хранение
-SQLite выбран для MVP, чтобы бот работал «из коробки». Запросы написаны так, чтобы
-переезд на PostgreSQL свёлся к смене драйвера и плейсхолдеров в `storage/db.go`.
-Живые объявления обрабатываются через durable state machine в `market_listings`
-(`DETAIL_PENDING` → `EVALUATING` → `ALERT_PENDING` → `DONE/DEAD`), а Telegram
-алерты доставляются через транзакционный `telegram_outbox`. Статус `ALERTED`
-ставится только после успешной отправки.
-
----
-
-## Тесты
-
-```bash
-go test ./...                       # unit-тесты (подпись и пр.)
-go test -tags live ./collector -run TestLive -v   # live-проверка реального KP API
+```powershell
+go test -count=1 ./...
+go vet ./...
+go mod verify
 ```
 
----
+CI also runs race tests and `govulncheck` on GitHub.
 
-## Ограничения MVP / что дальше
+Live KP checks are opt-in:
 
-- Авто-сообщения продавцам и воркер ответов (фазы 3–4 из ТЗ) — не реализованы.
-- Redis не используется (хватает SQLite + in-memory кэша).
-- Дальше: миграция на PostgreSQL, прокси/антибан, веб-дашборд.
+```powershell
+go test -tags live ./collector -run TestLive -v
+```
+
+## Operational Notes
+
+- Alerts are sent through `telegram_outbox`; a listing becomes `ALERTED` only
+  after successful Telegram delivery.
+- Incomplete work is stored as durable process states and retried with backoff.
+- SQLite is opened with WAL, busy timeout, foreign keys, integrity checks, and
+  daily `VACUUM INTO` backups.
+- Gemini cost/call stats are visible in digest/control health output.
+- Funnel trace can be enabled with `FUNNEL_TRACE=1` for listing-level debugging.

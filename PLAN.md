@@ -1,146 +1,201 @@
-# ТЗ v2 (финальное): KP Laptop Arbitrage Bot — «The Bot God of Laptop»
+# Current Technical Spec: KP Laptop Arbitrage Bot
 
-> Консолидировано из `1.txt`–`4.txt`. Правки из `4.txt` (исключение авто-откликов, Postgres как SSOT, батчный экспорт, worker pool, правила CPU) учтены и являются обязательными.
->
-> Update 2026-08-04: экспорт рынка переведён с Google Sheets API на локальный CSV-файл (`data/market_history.csv`) — без внешних зависимостей и ключей.
+Updated: 2026-08-11.
 
-## 1. Цель
+This file is the canonical project spec. Historical drafts were removed from Git
+because they described obsolete storage, export, and Gemini-pricing designs.
 
-Go-бот 24/7 мониторит новые объявления ноутбуков на **KupujemProdajem** (Сербия), каждое новое объявление анализирует через **Gemini** (текст + фото), находит недооценённые лоты и мгновенно доставляет их в **Telegram**. Вся коммуникация с продавцами — вручную пользователем (MVP).
+## Goal
 
-## 2. Стек
+Monitor KupujemProdajem laptop listings, enrich hardware specs, compare each
+listing against the local KP market, and send Telegram alerts only when the
+listing is actionable.
 
-| Компонент | Технология | Примечание |
-|---|---|---|
-| Язык | Go 1.25 | |
-| БД (SSOT) | SQLite (MVP) → PostgreSQL (продакшн) | замена только в слое `storage` |
-| ИИ | Gemini API (REST), модель `gemini-2.5-flash` (настраивается) | Text + Vision |
-| Уведомления | Telegram Bot API (REST) | ALERT / NEED CHECK |
-| Экспорт рынка | CSV-файл (`data/market_history.csv`) | батч раз в 30–60 мин |
-| Конфигурация | `.env` (godotenv) | шаблон: `.env.example` |
+The bot should avoid:
 
-## 3. Пайплайн
+- lost listings after temporary KP/Gemini/Telegram failures,
+- diamond alerts that are dominated by better alternatives,
+- alerts from shops/resellers,
+- market text that presents a global stale median as real value,
+- Gemini calls when deterministic parsing is enough.
 
-### Этап 0 — Сканер рынка (разовый/периодический, `cmd/market-scan`)
+## Runtime Blocks
 
-Проходит **всю** категорию ноутбуков через Search API (`page=1..N`, сортировка `posted desc`), каждое объявление (id, заголовок, цена, валюта, ссылка) пишет в `market_listings` со статусом `SCANNED`. Заполняет базу для кэша цен и экспорта в CSV. Остановки: конец выдачи, лимит страниц, либо N страниц подряд без новых лотов (при повторных запусках — инкрементальный).
-
-### Этап 1 — Живой цикл (каждые `POLL_INTERVAL_SEC`, по умолчанию 45 с)
-
-1. **Search API** — страница 1, до 30 свежих объявлений.
-2. **Дедупликация** — сверка `ad_id` в БД; известные лоты пропускаются.
-3. **Спам-фильтр** — по заголовку сразу, по имени продавца после детализации (маркеры магазинов: `store, shop, doo, d.o.o, laptop centar…`; партии: `na stanju, komada, lager…`).
-4. **Fetcher** — `GET /api/web/v1/eds/{ad_id}` (описание, HD-фото, атрибуты) **только для новых** ID + пауза `FETCH_DELAY_MS` между запросами.
-5. **Оценка Gemini** (worker pool ≤ `GEMINI_CONCURRENCY=5`):
-   - **Фаза 1 (текст):** заголовок + описание + атрибуты + рыночная сводка из кэша цен.
-   - **Фаза 2 (vision):** если `model_found=false` — все фото объявления (наклейки, шильдики, гравировки, скриншоты характеристик в конце галереи).
-6. **Вердикт:**
-   - `is_deal=true` → статус `ALERTED` + **ALERT** в Telegram;
-   - `need_check=true` → статус `NEED_CHECK` + **NEED CHECK** в Telegram;
-   - иначе → `NO_DEAL`, тихо.
-
-### Фоновые воркеры
-
-- **Кэш цен:** каждые `PRICE_CACHE_REFRESH_MIN=30` мин перечитывает БД (последние `PRICE_CACHE_DAYS=90` дней, цены в EUR), строит сводку «похожие лоты: медиана/диапазон» для промпта Gemini.
-- **CSV-экспортёр:** каждые `EXPORT_INTERVAL_MIN=30` мин забирает до 500 строк с `synced_to_sheets=0` и дописывает их в `data/market_history.csv` (Дата, Заголовок, Цена, Валюта, Ссылка), затем помечает синхронизированными. Записи во время парсинга **запрещены** — только батч.
-
-## 4. Структура проекта
-
-```
-D:\the_bot_god_of_laptop\
-├── PLAN.md                  — это ТЗ
-├── README.md                — установка и запуск
-├── go.mod
-├── .env.example             — шаблон ключей
-├── main.go                  — бот: воркеры, циклы, graceful shutdown
-├── cmd/market-scan/         — сканер всего рынка (этап 0)
-├── config/config.go         — конфигурация из env
-├── models/models.go         — SearchAd, AdDetailResponse, Listing, Verdict, статусы
-├── collector/
-│   ├── client.go            — HTTP-клиент KP (заголовки, ротация UA, 429)
-│   ├── poller.go            — Search API (страничный)
-│   ├── fetcher.go           — /eds/{ad_id}
-│   └── spam.go              — фильтр магазинов/партий
-├── storage/
-│   ├── db.go                — SQLite: market_listings, дедупликация, статусы
-│   └── pricecache.go        — кэш рыночных цен + сводка для промпта
-├── vision/
-│   ├── gemini.go            — REST-клиент Gemini (generateContent)
-│   └── evaluator.go         — 2-фазная оценка, промпт с правилами CPU, парсинг JSON
-├── notifier/telegram.go     — ALERT / NEED CHECK + inline-кнопка
-└── exporter/csv.go          — батчная дозапись рыночной истории в CSV
+```text
+main.go
+  -> collector: KP search/detail API and shared cooldown
+  -> storage: SQLite state, observations, outbox, backups
+  -> filters: L1 shop/reseller and L2 junk/defect
+  -> specs/hw: deterministic hardware parsing and benchmark lookup
+  -> vision: Gemini hardware extraction only
+  -> pricing: comparable market, rational ceiling, alternatives
+  -> funnel: final L0-L5 decision and alert text
+  -> notifier/control: Telegram delivery and control panel
 ```
 
-## 5. БД: таблица `market_listings`
+`DB_PATH` is the live processing database. `RESEARCH_DB_PATH` is the market and
+labeling dataset. They are intentionally separate for now.
 
-| Колонка | Тип | Назначение |
-|---|---|---|
-| `ad_id` | INTEGER PK | ID объявления KP (дедупликация) |
-| `title`, `price`, `currency`, `url` | | данные лота |
-| `description`, `seller` | TEXT | заполняются после `/eds/{id}` |
-| `status` | TEXT | `NEW` → `SCANNED / SKIPPED_SPAM / ALERTED / NEED_CHECK / NO_DEAL / ERROR` |
-| `is_deal`, `need_check`, `model_found` | 0/1 | вердикт Gemini |
-| `estimated_profit`, `reason`, `specs` | | вердикт Gemini |
-| `synced_to_sheets` | 0/1 | флаг для экспортёра |
-| `created_at` | INTEGER (unix) | время обнаружения ботом |
+## P0 Requirements
 
-SQLite — только на MVP: запросы написаны так, чтобы перенос на PostgreSQL свёлся к смене драйвера и плейсхолдеров.
+Live listings must be durable.
 
-## 6. Правила для Gemini (ОБЯЗАТЕЛЬНЫЕ, из 4.txt)
+- Store every discovered listing before processing.
+- Use process states: `DISCOVERED`, `DETAIL_PENDING`, `ENRICH_PENDING`,
+  `EVALUATING`, `ALERT_PENDING`, `DONE`, `DEAD`.
+- Keep `attempt_count`, `next_attempt_at`, `lease_until`, and `last_error`.
+- Retry temporary errors with backoff and recover unfinished work after restart.
 
-1. **Запрещено** `is_deal=true` без точной модели CPU (например `i5-1135G7`, `Ryzen 5 4600H`). «Просто i5/i7» — недостаточно.
-2. На фото искать наклейки Intel Core / AMD Ryzen и шильдики:
-   - серый/чёрный стикер Intel → 10–14 поколение;
-   - синий стикер Intel → 4–9 поколение (старьё).
-3. Поколение не определено → строго `{"is_deal": false, "need_check": true, "reason": "Неизвестно поколение CPU…"}` → бот шлёт `⚠️ NEED CHECK`.
-4. Модель не определена даже по фото → `model_found=false`.
+Telegram delivery must be durable.
 
-**Формат ответа Gemini (строго JSON):**
-```json
-{"is_deal": false, "need_check": false, "estimated_profit": 0, "reason": "аргументация", "specs": "модель и железо одной строкой", "model_found": true}
+- Use DB-backed `telegram_outbox`, not a lossy file queue.
+- Mark a listing as `ALERTED` only after confirmed Telegram delivery.
+- Store attempts, message id, and last error.
+- Drain pending outbox rows immediately after startup.
+
+Bad diamonds must be suppressed.
+
+- No diamond for K3/OLS production estimates.
+- No diamond with unknown GPU score, unknown condition, or unknown seller type.
+- No diamond when a clean private alternative dominates the candidate.
+- Step-up alternatives shown in alerts must contain a working link.
+
+Runtime must be controlled.
+
+- Start/Stop buttons must match pause/resume semantics.
+- A singleton lock prevents two live bots from running together.
+- Bot and research share KP cooldown state after 429/challenge.
+- Startup config validation must fail fast with a concrete error.
+
+## P1 Market Evaluation
+
+Alert text and decisions must separate:
+
+- comparable KP median,
+- lower quartile,
+- rational price ceiling,
+- confidence,
+- normalized performance index.
+
+The bot must not call a global model "average price for such laptops".
+
+Comparable groups should be built from fresh USED private listings and should
+prefer similarity by:
+
+- model/generation,
+- CPU,
+- GPU Mobile/TGP when known,
+- RAM,
+- SSD,
+- screen class,
+- condition,
+- defects,
+- battery,
+- warranty,
+- age.
+
+The rational ceiling is derived from stronger alternatives/Pareto front. A
+candidate is alert-worthy only if it is below the decision reference with margin
+and has no dominating available alternative.
+
+Performance comparison is multidimensional. CPU and GPU PassMark values are not
+summed directly; production value/step-up logic uses a normalized index.
+
+OLS/K3 remains an analysis tool only until a real backtest exists with:
+
+- holdout dataset,
+- MAPE/MAE by price band,
+- calibrated confidence,
+- comparison against a simple robust baseline.
+
+## P1 Seller And Ad Labels
+
+The runtime must use manual labels from `research.db.labels`.
+
+- `seller` labels: `SHOP`, `PRIVATE`.
+- `ad` labels: `JUNK`, `CLEAN`, `DEFECT`, `PARTS_ONLY`.
+- `SHOP` blocks seller alerts immediately.
+- `PRIVATE` bypasses behavioral heuristics but does not override current KP
+  `Trgovac` / `KP Izlog`.
+- `JUNK` blocks an ad immediately.
+- `CLEAN` overrides text junk markers but not official `condition=broken`.
+
+Label workflow:
+
+```powershell
+go run ./cmd/label -db data/research.db -export-top 50 -out data/labels_review.csv
+go run ./cmd/label -db data/research.db -export-random 50 -out data/labels_private.csv
+go run ./cmd/label -db data/research.db -import data/labels_review.csv
+go run ./cmd/label -db data/research.db -show
 ```
 
-## 7. Telegram
+Seller precision target for alerting is at least 98% private-seller precision.
+Unknown sellers should be reviewed separately instead of promoted to diamonds.
 
-- **ALERT:** `🚀 НАЙДЕН ПРОФИТ!` — ноутбук, цена продавца, рыночная сводка, ожидаемая прибыль, причина, ссылка + inline-кнопка «Открыть объявление на KP».
-- **NEED CHECK:** `⚠️ ТРЕБУЕТСЯ ПРОВЕРКА` — заголовок, цена, причина, ссылка.
-- Без настроенного Telegram — алерты печатаются в консоль (dry-run).
+## P1 Gemini And Photos
 
-## 8. Антибан KP
+Gemini is not a pricing engine. It can only extract or confirm hardware facts.
 
-- Обязательные заголовки: `accept`, `accept-language: sr-RS…`, мобильный `user-agent` (ротация из 4), `x-kp-channel: mobile_web_react`.
-- `FETCH_DELAY_MS=700` между запросами деталей; пауза между страницами сканера.
-- HTTP 429 → пауза/бэкофф, не более N повторов подряд.
-- Тяжёлый `/eds/{id}` дёргается **только** для новых объявлений.
+Extraction order:
 
-## 9. Scope MVP
+1. deterministic parser and local model/benchmark catalogs,
+2. title, description, and KP attributes,
+3. all listing photos, preserving order,
+4. web/model research only when an exact SKU/MTM/model code is available.
 
-**Входит:** сканер рынка, поллер, дедупликация, спам-фильтр, fetcher, Gemini Text+Vision с worker pool, кэш цен, Telegram-алерты, CSV-экспортёр.
+Defaults:
 
-**НЕ входит (правка 4.txt):** авто-сообщения продавцам (Reply Worker, `WAITING_SELLER_REPLY`, авторизованные запросы к KP) — коммуникация вручную по ссылке; Redis (SQLite достаточно).
+- Flash-Lite for text, vision, and exact-model research.
+- More expensive models only by explicit config.
+- Daily Gemini call limit, retry on 429/5xx, and circuit breaker.
+- Cache merges partial results; later stages must not wipe earlier fields.
 
-## 10. Конфигурация (.env)
+Field provenance must remain visible through source labels such as `regex`,
+`gemini-text`, `gemini-photo-all`, and `gemini-search`.
 
-| Переменная | Дефолт | Назначение |
-|---|---|---|
-| `POLL_INTERVAL_SEC` | 45 | интервал опроса Search API |
-| `DB_PATH` | `data/kp_bot.db` | файл SQLite |
-| `FETCH_DELAY_MS` | 700 | пауза между `/eds/` |
-| `GEMINI_API_KEY` | — | ключ Gemini (обязателен для анализа) |
-| `GEMINI_MODEL` | `gemini-2.5-flash` | модель |
-| `GEMINI_CONCURRENCY` | 5 | размер worker pool |
-| `TELEGRAM_BOT_TOKEN` / `TELEGRAM_CHAT_ID` | — | уведомления |
-| `CSV_PATH` | `data/market_history.csv` | CSV-файл экспорта рыночной базы |
-| `EXPORT_INTERVAL_MIN` | 30 | период экспорта |
-| `PRICE_CACHE_REFRESH_MIN` / `PRICE_CACHE_DAYS` | 30 / 90 | кэш цен |
+## P2 Stability
 
-## 11. Этапы реализации
+CI must run:
 
-0. ✅ Каркас проекта + это ТЗ.
-1. ✅ **Сканер рынка** `cmd/market-scan` — собрать всю рыночную базу (выполняется в первую очередь).
-2. Ядро бота: poller/fetcher/spam/storage.
-3. Gemini-оценщик (Text + Vision, pool ≤5).
-4. Telegram-нотификатор (ALERT / NEED CHECK).
-5. CSV-экспортёр + `main.go` (связка и запуск).
-6. Эксплуатация: полный скан рынка → заполнить `.env` → запуск бота.
-7. Post-MVP: миграция SQLite → PostgreSQL; фазы 3–4 из `1.txt` (авто-сообщение продавцу на сербском + воркер ответов); прокси/дополнительные антибан-меры; веб-дашборд.
+- `go test`,
+- race tests,
+- `go vet`,
+- `govulncheck`,
+- migration/schema checks.
+
+SQLite requirements:
+
+- versioned transactional migrations,
+- WAL,
+- busy timeout,
+- foreign keys,
+- integrity check,
+- daily `VACUUM INTO` backups.
+
+Health output must include:
+
+- last successful search/detail/Gemini/Telegram age,
+- queue sizes,
+- KP challenge/cooldown state,
+- Gemini call and cost stats,
+- build version,
+- schema version.
+
+Repository hygiene:
+
+- no checked-in binaries,
+- no downloaded JS/HTML probes,
+- no obsolete prompt drafts,
+- README and HANDOFF must describe current behavior.
+
+## Acceptance
+
+On a replay dataset:
+
+- no lost listings after KP/Gemini/Telegram outages and process restart,
+- no duplicate Telegram alerts,
+- no diamond with a dominating alternative,
+- every step-up link is present,
+- shop/reseller alerts stay below 2%,
+- unknown GPU/condition/seller diamonds are suppressed,
+- Gemini cost stays within configured limits.
