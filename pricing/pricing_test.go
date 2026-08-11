@@ -549,11 +549,12 @@ func TestStatsPoolDGPUOnly(t *testing.T) {
 	lots := []Lot{
 		mkLotGPU(1, "i5-1135G7", 10000, 16, 512, "RTX 3050", 6000, 500, 5), // dGPU
 		mkLot(2, "i5-1135G7", 10000, 16, 512, 300, 5),                      // без GPU (офисный)
+		mkLotGPU(3, "i5-1135G7", 10000, 16, 512, "integrated", 0, 320, 5),  // явная встройка
 	}
 	full := marketWith(t, lots, 60)
 	full.medianWindowDays = 60
-	if got := len(full.Pool()); got != 2 {
-		t.Errorf("полный пул = %d, жду 2", got)
+	if got := len(full.Pool()); got != 3 {
+		t.Errorf("полный пул = %d, жду 3", got)
 	}
 	dgpu := marketWithDGPU(t, lots, 60)
 	pool := dgpu.Pool()

@@ -41,13 +41,13 @@ CREATE TABLE research_specs (
 		price    float64
 		currency string
 	}{
-		{1, 3000, "EUR"},    // €3000
-		{2, 468800, "RSD"},  // €4000 — должен быть ПЕРВЫМ
-		{3, 6000, "EUR"},    // €6000 — выше потолка 5000, отфильтрован
-		{4, 590000, "RSD"},  // ~€5034 — выше потолка, отфильтрован
-		{5, 5, "EUR"},       // €5 — ниже порога 10, отфильтрован
-		{6, 999999, "RSD"},  // распознан CPU — исключён
-		{7, 999998, "RSD"},  // уже обработан Gemini — исключён
+		{1, 3000, "EUR"},   // €3000
+		{2, 468800, "RSD"}, // €4000 — должен быть ПЕРВЫМ
+		{3, 6000, "EUR"},   // €6000 — выше потолка 5000, отфильтрован
+		{4, 590000, "RSD"}, // ~€5034 — выше потолка, отфильтрован
+		{5, 5, "EUR"},      // €5 — ниже порога 10, отфильтрован
+		{6, 999999, "RSD"}, // распознан CPU — исключён
+		{7, 999998, "RSD"}, // уже обработан Gemini — исключён
 	}
 	for _, r := range rows {
 		if _, err := db.Exec(
@@ -72,5 +72,46 @@ CREATE TABLE research_specs (
 	}
 	if cands[1].AdID != 1 {
 		t.Errorf("вторым должен быть EUR-лот €3000 (ad_id=1), got ad_id=%d", cands[1].AdID)
+	}
+}
+
+func TestWriteBackMergesPartialSpecs(t *testing.T) {
+	db, err := sql.Open("sqlite", filepath.Join(t.TempDir(), "test.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	if _, err := db.Exec(`
+CREATE TABLE research_specs (
+	ad_id INTEGER PRIMARY KEY,
+	cpu_model TEXT NOT NULL DEFAULT '',
+	cpu_score REAL NOT NULL DEFAULT 0,
+	ram_gb INTEGER NOT NULL DEFAULT 0,
+	ssd_gb INTEGER NOT NULL DEFAULT 0,
+	gpu_model TEXT NOT NULL DEFAULT '',
+	gpu_score REAL NOT NULL DEFAULT 0,
+	updated_at INTEGER NOT NULL DEFAULT 0,
+	source TEXT NOT NULL DEFAULT 'regex'
+);`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec(`
+INSERT INTO research_specs (ad_id, cpu_model, cpu_score, ram_gb, ssd_gb, source)
+VALUES (10, 'i7-10850H', 7198, 32, 512, 'regex')`); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := writeBack(context.Background(), db, 10, geminiSpecs{GPU: "NVIDIA Quadro T1000"}, nil, nil); err != nil {
+		t.Fatal(err)
+	}
+	var cpu, gpu, source string
+	var ram, ssd int
+	if err := db.QueryRow(`
+SELECT cpu_model, ram_gb, ssd_gb, gpu_model, source FROM research_specs WHERE ad_id=10`).
+		Scan(&cpu, &ram, &ssd, &gpu, &source); err != nil {
+		t.Fatal(err)
+	}
+	if cpu != "i7-10850H" || ram != 32 || ssd != 512 || gpu != "NVIDIA Quadro T1000" || source != "gemini-text" {
+		t.Fatalf("merged row = cpu=%q ram=%d ssd=%d gpu=%q source=%q", cpu, ram, ssd, gpu, source)
 	}
 }

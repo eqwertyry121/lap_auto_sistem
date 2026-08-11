@@ -209,9 +209,12 @@ func writeBack(ctx context.Context, db *sql.DB, adID int64, sp geminiSpecs,
 INSERT INTO research_specs (ad_id, cpu_model, cpu_score, ram_gb, ssd_gb, gpu_model, gpu_score, updated_at, source)
 VALUES (?,?,?,?,?,?,?,?, 'gemini-text')
 ON CONFLICT(ad_id) DO UPDATE SET
-	cpu_model=excluded.cpu_model, cpu_score=excluded.cpu_score,
-	ram_gb=excluded.ram_gb, ssd_gb=excluded.ssd_gb,
-	gpu_model=excluded.gpu_model, gpu_score=excluded.gpu_score,
+	cpu_model=CASE WHEN excluded.cpu_model != '' THEN excluded.cpu_model ELSE research_specs.cpu_model END,
+	cpu_score=CASE WHEN excluded.cpu_model != '' THEN excluded.cpu_score ELSE research_specs.cpu_score END,
+	ram_gb=CASE WHEN excluded.ram_gb > 0 THEN excluded.ram_gb ELSE research_specs.ram_gb END,
+	ssd_gb=CASE WHEN excluded.ssd_gb > 0 THEN excluded.ssd_gb ELSE research_specs.ssd_gb END,
+	gpu_model=CASE WHEN excluded.gpu_model != '' THEN excluded.gpu_model ELSE research_specs.gpu_model END,
+	gpu_score=CASE WHEN excluded.gpu_model != '' THEN excluded.gpu_score ELSE research_specs.gpu_score END,
 	updated_at=excluded.updated_at, source=excluded.source`,
 		adID, cpuModel, cpuScore, sp.RAMGB, sp.SSDGB, gpuModel, gpuScore, time.Now().Unix())
 	return err

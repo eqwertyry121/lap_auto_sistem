@@ -16,6 +16,7 @@ import (
 	"math"
 	"sort"
 	"strconv"
+	"strings"
 	"time"
 
 	_ "modernc.org/sqlite"
@@ -289,7 +290,7 @@ func (m *Market) statsPool(windowDays int) []Lot {
 		}
 		// PLAN_v5: рынок ноутбуков с дискретной графикой — без dGPU лоты
 		// в статистику не входят (иначе офисные смешиваются с игровыми).
-		if m.dgpuOnly && l.GPUModel == "" && l.GPUScore <= 0 {
+		if m.dgpuOnly && !hasDiscreteGPU(l) {
 			continue
 		}
 		if l.Price < priceFloor || l.Price > priceCeil {
@@ -304,6 +305,18 @@ func (m *Market) statsPool(windowDays int) []Lot {
 		out = append(out, l)
 	}
 	return out
+}
+
+func hasDiscreteGPU(l Lot) bool {
+	if l.GPUScore > 0 {
+		return true
+	}
+	switch strings.ToLower(strings.TrimSpace(l.GPUModel)) {
+	case "", "integrated", "встроенная", "встроенная видеокарта", "встройка":
+		return false
+	default:
+		return true
+	}
 }
 
 // hedonicTraining — обучающая выборка OLS (PLAN_v4 §3.5): USED, частники,

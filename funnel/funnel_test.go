@@ -1,12 +1,16 @@
 package funnel
 
 import (
+	"context"
+	"database/sql"
+	"path/filepath"
 	"strings"
 	"testing"
 
 	"kpbot/filters"
 	"kpbot/models"
 	"kpbot/pricing"
+	"kpbot/specs"
 )
 
 func TestDecideL0(t *testing.T) {
@@ -156,6 +160,68 @@ func TestWithoutProductionOLSKeepsAlternatives(t *testing.T) {
 	if got.DominatedBy == nil || got.DominatedBy.AdID != dom.AdID || got.StepUp == nil || got.StepUp.AdID != step.AdID {
 		t.Fatalf("alternatives must survive K3 clearing: %+v", got)
 	}
+}
+
+func TestCachedGeminiSpecsMergePartialStages(t *testing.T) {
+	dbPath := newSpecsCacheDB(t)
+	ctx := context.Background()
+
+	if err := saveCachedGeminiSpecs(ctx, dbPath, 101, "gemini-text", specs.GeminiSpecs{
+		CPU: "i7-10850H", RAMGB: 32, SSDGB: 512,
+	}, nil, nil); err != nil {
+		t.Fatal(err)
+	}
+	if err := saveCachedGeminiSpecs(ctx, dbPath, 101, "gemini-photo-all", specs.GeminiSpecs{
+		GPU: "NVIDIA Quadro T1000",
+	}, nil, nil); err != nil {
+		t.Fatal(err)
+	}
+
+	got, source, ok := loadCachedGeminiSpecs(ctx, dbPath, 101)
+	if !ok {
+		t.Fatal("cached Gemini specs not found")
+	}
+	if got.CPU != "i7-10850H" || got.RAMGB != 32 || got.SSDGB != 512 || got.GPU != "NVIDIA Quadro T1000" {
+		t.Fatalf("merged specs = %+v", got)
+	}
+	if !hasSpecSource(source, "gemini-text") || !hasSpecSource(source, "gemini-photo-all") {
+		t.Fatalf("source %q must keep both stages", source)
+	}
+}
+
+func TestSpecSourceTokensAreExact(t *testing.T) {
+	source := "gemini-photo-all+gemini-search"
+	if hasSpecSource(source, "gemini-text") {
+		t.Fatalf("%q must not imply gemini-text", source)
+	}
+	if !hasSpecSource(source, "gemini-photo-all") || !hasSpecSource(source, "gemini-search") {
+		t.Fatalf("%q source tokens not detected", source)
+	}
+}
+
+func newSpecsCacheDB(t *testing.T) string {
+	t.Helper()
+	dbPath := filepath.Join(t.TempDir(), "research.db")
+	db, err := sql.Open("sqlite", dbPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	if _, err := db.Exec(`
+CREATE TABLE research_specs (
+	ad_id INTEGER PRIMARY KEY,
+	cpu_model TEXT NOT NULL DEFAULT '',
+	cpu_score REAL NOT NULL DEFAULT 0,
+	ram_gb INTEGER NOT NULL DEFAULT 0,
+	ssd_gb INTEGER NOT NULL DEFAULT 0,
+	gpu_model TEXT NOT NULL DEFAULT '',
+	gpu_score REAL NOT NULL DEFAULT 0,
+	updated_at INTEGER NOT NULL DEFAULT 0,
+	source TEXT NOT NULL DEFAULT ''
+);`); err != nil {
+		t.Fatal(err)
+	}
+	return dbPath
 }
 
 func TestManualAlertWorthy(t *testing.T) {

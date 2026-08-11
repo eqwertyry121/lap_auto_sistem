@@ -417,9 +417,9 @@ func Run(ctx context.Context, f *Funnel, cfg *config.Config, gem *vision.GeminiC
 	if gs, source, ok := loadCachedGeminiSpecs(ctx, cfg.ResearchDBPath, ad.AdID); ok {
 		tr.f("L3.cache: найден research_specs source=%s — использую как начальные спеки", source)
 		merge("L3.cache", source, gs)
-		cachedText = strings.HasPrefix(source, "gemini-")
-		cachedPhoto = strings.HasPrefix(source, "gemini-photo-all")
-		cachedSearch = strings.HasPrefix(source, "gemini-search")
+		cachedText = hasSpecSource(source, "gemini-text")
+		cachedPhoto = hasSpecSource(source, "gemini-photo-all")
+		cachedSearch = hasSpecSource(source, "gemini-search")
 	}
 	missing := func() bool {
 		return cpuModel == "" || (cfg.RequireDGPU && gpuModel == "" && !integratedGPU)
@@ -838,12 +838,77 @@ func loadCachedGeminiSpecs(ctx context.Context, dbPath string, adID int64) (spec
 	err = db.QueryRowContext(ctx, `
 SELECT COALESCE(cpu_model,''), COALESCE(ram_gb,0), COALESCE(ssd_gb,0), COALESCE(gpu_model,''), COALESCE(source,'')
 FROM research_specs
-WHERE ad_id=? AND source LIKE 'gemini%'
+WHERE ad_id=? AND source LIKE '%gemini%'
 LIMIT 1`, adID).Scan(&gs.CPU, &gs.RAMGB, &gs.SSDGB, &gs.GPU, &source)
 	if err != nil {
 		return specs.GeminiSpecs{}, "", false
 	}
 	return gs, source, true
+}
+
+func loadAnyCachedSpecs(ctx context.Context, db *sql.DB, adID int64) (specs.GeminiSpecs, string, bool, error) {
+	var gs specs.GeminiSpecs
+	var source string
+	err := db.QueryRowContext(ctx, `
+SELECT COALESCE(cpu_model,''), COALESCE(ram_gb,0), COALESCE(ssd_gb,0), COALESCE(gpu_model,''), COALESCE(source,'')
+FROM research_specs
+WHERE ad_id=?
+LIMIT 1`, adID).Scan(&gs.CPU, &gs.RAMGB, &gs.SSDGB, &gs.GPU, &source)
+	switch err {
+	case nil:
+		return gs, source, true, nil
+	case sql.ErrNoRows:
+		return specs.GeminiSpecs{}, "", false, nil
+	default:
+		return specs.GeminiSpecs{}, "", false, err
+	}
+}
+
+func mergeCachedSpecs(existing, incoming specs.GeminiSpecs) specs.GeminiSpecs {
+	out := existing
+	if v := strings.TrimSpace(incoming.CPU); v != "" {
+		out.CPU = v
+	}
+	if incoming.RAMGB > 0 {
+		out.RAMGB = incoming.RAMGB
+	}
+	if incoming.SSDGB > 0 {
+		out.SSDGB = incoming.SSDGB
+	}
+	if v := strings.TrimSpace(incoming.GPU); v != "" {
+		out.GPU = v
+	}
+	return out
+}
+
+func hasSpecSource(source, want string) bool {
+	for _, part := range strings.Split(source, "+") {
+		if strings.TrimSpace(part) == want {
+			return true
+		}
+	}
+	return false
+}
+
+func mergeSpecSource(existing, incoming string) string {
+	var out []string
+	add := func(s string) {
+		for _, part := range strings.Split(s, "+") {
+			part = strings.TrimSpace(part)
+			if part == "" {
+				continue
+			}
+			for _, old := range out {
+				if old == part {
+					return
+				}
+			}
+			out = append(out, part)
+		}
+	}
+	add(incoming)
+	add(existing)
+	return strings.Join(out, "+")
 }
 
 func saveCachedGeminiSpecs(ctx context.Context, dbPath string, adID int64, source string, gs specs.GeminiSpecs,
@@ -855,6 +920,13 @@ func saveCachedGeminiSpecs(ctx context.Context, dbPath string, adID int64, sourc
 	defer db.Close()
 	db.SetMaxOpenConns(1)
 	_, _ = db.ExecContext(ctx, `PRAGMA busy_timeout=5000`)
+
+	if existing, existingSource, ok, err := loadAnyCachedSpecs(ctx, db, adID); err != nil {
+		return err
+	} else if ok {
+		gs = mergeCachedSpecs(existing, gs)
+		source = mergeSpecSource(existingSource, source)
+	}
 
 	cpuModel, cpuScore := matchCPU(cpus, strings.TrimSpace(gs.CPU))
 	gpuModel, gpuScore := matchGPU(gpus, strings.TrimSpace(gs.GPU))
