@@ -34,6 +34,9 @@ type RuntimeHealthProvider interface {
 	LastGeminiOK() time.Time
 	LastTelegramOK() time.Time
 	LastBackupOK() time.Time
+	GeminiCallsToday() int
+	GeminiDailyLimit() int
+	GeminiCircuitUntil() time.Time
 }
 
 // Panel — состояние пульта.
@@ -254,6 +257,10 @@ func (p *Panel) status(ctx context.Context) {
 		fmt.Fprintf(&b, "search_ok: %s\n", runtimeAge(now, p.health.LastSearchOK()))
 		fmt.Fprintf(&b, "detail_ok: %s\n", runtimeAge(now, p.health.LastDetailOK()))
 		fmt.Fprintf(&b, "gemini_ok: %s\n", runtimeAge(now, p.health.LastGeminiOK()))
+		fmt.Fprintf(&b, "gemini_calls: %s\n", geminiCallsStatus(p.health.GeminiCallsToday(), p.health.GeminiDailyLimit()))
+		if until := p.health.GeminiCircuitUntil(); until.After(now) {
+			fmt.Fprintf(&b, "gemini_circuit: %s\n", runtimeRemaining(now, until))
+		}
 		fmt.Fprintf(&b, "telegram_ok: %s\n", runtimeAge(now, p.health.LastTelegramOK()))
 		fmt.Fprintf(&b, "backup_ok: %s\n", runtimeAge(now, p.health.LastBackupOK()))
 	}
@@ -352,6 +359,20 @@ func runtimeAge(now, t time.Time) string {
 		return "0s"
 	}
 	return now.Sub(t).Round(time.Minute).String()
+}
+
+func runtimeRemaining(now, until time.Time) string {
+	if !until.After(now) {
+		return "inactive"
+	}
+	return until.Sub(now).Round(time.Minute).String()
+}
+
+func geminiCallsStatus(callsToday, dailyLimit int) string {
+	if dailyLimit > 0 {
+		return fmt.Sprintf("%d/%d", callsToday, dailyLimit)
+	}
+	return fmt.Sprintf("%d/unlimited", callsToday)
 }
 
 func fileMTime(path string) time.Time {

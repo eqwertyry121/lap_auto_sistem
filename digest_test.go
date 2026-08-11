@@ -72,10 +72,13 @@ func TestDigestText(t *testing.T) {
 	processStates := map[string]int{"DETAIL_PENDING": 2, "DONE": 20}
 	now := time.Date(2026, 8, 11, 12, 0, 0, 0, time.UTC)
 	health := runtimeHealth{
-		Now:            now,
-		LastSearchOK:   now.Add(-5 * time.Minute),
-		LastDetailOK:   now.Add(-12 * time.Minute),
-		LastTelegramOK: now.Add(-20 * time.Minute),
+		Now:                now,
+		LastSearchOK:       now.Add(-5 * time.Minute),
+		LastDetailOK:       now.Add(-12 * time.Minute),
+		LastTelegramOK:     now.Add(-20 * time.Minute),
+		GeminiCallsToday:   7,
+		GeminiDailyLimit:   80,
+		GeminiCircuitUntil: now.Add(30 * time.Minute),
 	}
 	text := digestText(25*time.Hour+13*time.Minute, byStatus, 4, 24677, 858, alerts, processStates, 1, health)
 
@@ -90,6 +93,8 @@ func TestDigestText(t *testing.T) {
 		"search_ok: 5m0s",
 		"detail_ok: 12m0s",
 		"gemini_ok: never",
+		"gemini_calls: 7/80",
+		"gemini_circuit: 30m0s",
 		"telegram_ok: 20m0s",
 		"backup_ok: never",
 		"€240",

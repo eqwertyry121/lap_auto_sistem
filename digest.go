@@ -32,12 +32,15 @@ func nextDigestTime(now time.Time, h, m int) time.Time {
 }
 
 type runtimeHealth struct {
-	Now            time.Time
-	LastSearchOK   time.Time
-	LastDetailOK   time.Time
-	LastGeminiOK   time.Time
-	LastTelegramOK time.Time
-	LastBackupOK   time.Time
+	Now                time.Time
+	LastSearchOK       time.Time
+	LastDetailOK       time.Time
+	LastGeminiOK       time.Time
+	LastTelegramOK     time.Time
+	LastBackupOK       time.Time
+	GeminiCallsToday   int
+	GeminiDailyLimit   int
+	GeminiCircuitUntil time.Time
 }
 
 // digestText собирает HTML-текст дайджеста. challenges — счётчик с момента
@@ -75,6 +78,10 @@ func digestText(uptime time.Duration, byStatus map[string]int, challenges int64,
 	fmt.Fprintf(&b, "  - search_ok: %s\n", healthAge(now, health.LastSearchOK))
 	fmt.Fprintf(&b, "  - detail_ok: %s\n", healthAge(now, health.LastDetailOK))
 	fmt.Fprintf(&b, "  - gemini_ok: %s\n", healthAge(now, health.LastGeminiOK))
+	fmt.Fprintf(&b, "  - gemini_calls: %s\n", geminiCallsLine(health.GeminiCallsToday, health.GeminiDailyLimit))
+	if health.GeminiCircuitUntil.After(now) {
+		fmt.Fprintf(&b, "  - gemini_circuit: %s\n", healthRemaining(now, health.GeminiCircuitUntil))
+	}
 	fmt.Fprintf(&b, "  - telegram_ok: %s\n", healthAge(now, health.LastTelegramOK))
 	fmt.Fprintf(&b, "  - backup_ok: %s\n", healthAge(now, health.LastBackupOK))
 
@@ -117,6 +124,20 @@ func healthAge(now, t time.Time) string {
 		return "0s"
 	}
 	return now.Sub(t).Round(time.Minute).String()
+}
+
+func healthRemaining(now, until time.Time) string {
+	if !until.After(now) {
+		return "inactive"
+	}
+	return until.Sub(now).Round(time.Minute).String()
+}
+
+func geminiCallsLine(callsToday, dailyLimit int) string {
+	if dailyLimit > 0 {
+		return fmt.Sprintf("%d/%d", callsToday, dailyLimit)
+	}
+	return fmt.Sprintf("%d/unlimited", callsToday)
 }
 
 func truncateLine(s string, n int) string {

@@ -38,6 +38,9 @@ type botState struct {
 	lastGeminiOK   atomic.Int64
 	lastTelegramOK atomic.Int64
 	lastBackupOK   atomic.Int64
+	geminiCalls    atomic.Int64
+	geminiLimit    atomic.Int64
+	geminiCircuit  atomic.Int64
 	manualPaused   atomic.Bool // пульт: ⏹ Стоп
 }
 
@@ -60,15 +63,39 @@ func (s *botState) LastDetailOK() time.Time   { return loadUnixTime(&s.lastDetai
 func (s *botState) LastGeminiOK() time.Time   { return loadUnixTime(&s.lastGeminiOK) }
 func (s *botState) LastTelegramOK() time.Time { return loadUnixTime(&s.lastTelegramOK) }
 func (s *botState) LastBackupOK() time.Time   { return loadUnixTime(&s.lastBackupOK) }
+func (s *botState) GeminiCallsToday() int     { return int(s.geminiCalls.Load()) }
+func (s *botState) GeminiDailyLimit() int     { return int(s.geminiLimit.Load()) }
+func (s *botState) GeminiCircuitUntil() time.Time {
+	return loadUnixTime(&s.geminiCircuit)
+}
+
+func (s *botState) syncGeminiStats(stats vision.GeminiStats) {
+	if s == nil {
+		return
+	}
+	if !stats.LastSuccess.IsZero() {
+		s.markLastGeminiOK(stats.LastSuccess)
+	}
+	s.geminiCalls.Store(int64(stats.CallsToday))
+	s.geminiLimit.Store(int64(stats.DailyLimit))
+	if stats.CircuitUntil.IsZero() {
+		s.geminiCircuit.Store(0)
+	} else {
+		storeUnixTime(&s.geminiCircuit, stats.CircuitUntil)
+	}
+}
 
 func (s *botState) healthSnapshot(now time.Time) runtimeHealth {
 	return runtimeHealth{
-		Now:            now,
-		LastSearchOK:   s.LastSearchOK(),
-		LastDetailOK:   s.LastDetailOK(),
-		LastGeminiOK:   s.LastGeminiOK(),
-		LastTelegramOK: s.LastTelegramOK(),
-		LastBackupOK:   s.LastBackupOK(),
+		Now:                now,
+		LastSearchOK:       s.LastSearchOK(),
+		LastDetailOK:       s.LastDetailOK(),
+		LastGeminiOK:       s.LastGeminiOK(),
+		LastTelegramOK:     s.LastTelegramOK(),
+		LastBackupOK:       s.LastBackupOK(),
+		GeminiCallsToday:   s.GeminiCallsToday(),
+		GeminiDailyLimit:   s.GeminiDailyLimit(),
+		GeminiCircuitUntil: s.GeminiCircuitUntil(),
 	}
 }
 
@@ -149,6 +176,7 @@ func main() {
 	go st.beat.Run(ctx, time.Minute)
 
 	gemini := vision.NewGeminiClient(cfg.GeminiAPIKey, cfg.GeminiModel).SetLimits(cfg.GeminiConcurrency, cfg.GeminiDailyLimit)
+	st.syncGeminiStats(gemini.Stats())
 	tg := notifier.New(cfg.TelegramToken, cfg.TelegramChatID)
 	kp := collector.NewClient()
 	go telegramOutboxLoop(ctx, store, tg, log, st)
@@ -510,9 +538,7 @@ func processDueListings(ctx context.Context, kp *collector.Client, store *storag
 			}
 			_ = store.MarkProcessState(ctx, l.AdID, models.ProcessEvaluating)
 			out := funnel.Run(ctx, fnl, cfg, gem, log, ad, detail)
-			if lastGemini := gem.LastSuccess(); !lastGemini.IsZero() {
-				st.markLastGeminiOK(lastGemini)
-			}
+			st.syncGeminiStats(gem.Stats())
 			if out.AlertText != "" {
 				if err := store.SaveFunnelAlertPending(ctx, l.AdID, out.Audit, out.AlertText, out.AlertURL, out.Status); err != nil {
 					log.Error("funnel alert outbox", "ad_id", l.AdID, "err", err)

@@ -49,6 +49,14 @@ type geminiStats struct {
 	lastOKUnix atomic.Int64
 }
 
+type GeminiStats struct {
+	CallsToday    int
+	DailyLimit    int
+	LastSuccess   time.Time
+	CircuitUntil  time.Time
+	CircuitReason string
+}
+
 func NewGeminiClient(apiKey, model string) *GeminiClient {
 	if model == "" {
 		model = "gemini-2.5-flash-lite"
@@ -73,6 +81,28 @@ func (g *GeminiClient) LastSuccess() time.Time {
 		return time.Time{}
 	}
 	return time.Unix(unix, 0)
+}
+
+func (g *GeminiClient) Stats() GeminiStats {
+	if g == nil {
+		return GeminiStats{}
+	}
+	out := GeminiStats{LastSuccess: g.LastSuccess()}
+	if g.limiter != nil {
+		g.limiter.mu.Lock()
+		out.DailyLimit = g.limiter.dailyLimit
+		if g.limiter.day == time.Now().Format("2006-01-02") {
+			out.CallsToday = g.limiter.calls
+		}
+		g.limiter.mu.Unlock()
+	}
+	if g.circuit != nil {
+		g.circuit.mu.Lock()
+		out.CircuitUntil = g.circuit.until
+		out.CircuitReason = g.circuit.reason
+		g.circuit.mu.Unlock()
+	}
+	return out
 }
 
 func (g *GeminiClient) SetLimits(concurrency, dailyLimit int) *GeminiClient {
