@@ -794,10 +794,21 @@ func matchCPU(cpus map[string]hw.CPU, name string) (string, float64) {
 	if name == "" || cpus == nil {
 		return name, 0
 	}
-	if c, ok := cpus[hw.Key(name)]; ok {
-		return c.Name, c.Score
+	for _, key := range cpuLookupKeys(name) {
+		if c, ok := cpus[key]; ok {
+			return c.Name, c.Score
+		}
 	}
 	return name, 0
+}
+
+func cpuLookupKeys(name string) []string {
+	key := hw.Key(name)
+	keys := []string{key}
+	if fallback := strings.Replace(key, " pro ", " ", 1); fallback != key {
+		keys = append(keys, fallback)
+	}
+	return keys
 }
 
 func matchGPU(gpus map[string]hw.GPU, name string) (string, float64) {

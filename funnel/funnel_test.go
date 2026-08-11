@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	"kpbot/filters"
+	"kpbot/hw"
 	"kpbot/models"
 	"kpbot/pricing"
 	"kpbot/specs"
@@ -185,6 +186,21 @@ func TestDiamondSuppressionAllowsKnownIntegratedGPU(t *testing.T) {
 	got = diamondSuppressionReason(pricing.PriceEstimate{Level: "K0"}, 0, false, "used", true)
 	if !strings.Contains(got, "unknown GPU score") {
 		t.Fatalf("unknown GPU must still suppress diamond, got %q", got)
+	}
+}
+
+func TestMatchCPUFallsBackFromRyzenProToBaseSKU(t *testing.T) {
+	cpus := map[string]hw.CPU{
+		hw.Key("AMD Ryzen 7 PRO 8840HS"): {Name: "AMD Ryzen 7 PRO 8840HS", Score: 16168},
+		hw.Key("AMD Ryzen 7 8840U"):      {Name: "AMD Ryzen 7 8840U", Score: 14125},
+	}
+	name, score := matchCPU(cpus, "Ryzen 7 PRO 8840HS")
+	if name != "AMD Ryzen 7 PRO 8840HS" || score != 16168 {
+		t.Fatalf("exact PRO match = %q %.0f", name, score)
+	}
+	name, score = matchCPU(cpus, "Ryzen 7 PRO 8840U")
+	if name != "AMD Ryzen 7 8840U" || score != 14125 {
+		t.Fatalf("PRO fallback match = %q %.0f", name, score)
 	}
 }
 
