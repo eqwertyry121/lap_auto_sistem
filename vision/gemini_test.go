@@ -67,6 +67,9 @@ func TestGeminiRetriesRetryableHTTP(t *testing.T) {
 	if g.limiter.calls != 1 {
 		t.Fatalf("daily calls = %d, want 1", g.limiter.calls)
 	}
+	if g.LastSuccess().IsZero() {
+		t.Fatal("LastSuccess was not recorded")
+	}
 }
 
 func TestGeminiCooldownSkipsCallAndDailyReserve(t *testing.T) {

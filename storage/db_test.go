@@ -118,4 +118,11 @@ func TestFunnelAlertPendingBecomesAlertedOnlyAfterOutboxSent(t *testing.T) {
 	if status != string(models.StatusAlerted) || process != string(models.ProcessDone) {
 		t.Fatalf("status=%s process=%s, want ALERTED/DONE", status, process)
 	}
+	last, err := st.LastTelegramDelivery(ctx)
+	if err != nil {
+		t.Fatalf("last telegram delivery: %v", err)
+	}
+	if last.IsZero() || time.Since(last) > time.Minute {
+		t.Fatalf("last telegram delivery = %s", last)
+	}
 }

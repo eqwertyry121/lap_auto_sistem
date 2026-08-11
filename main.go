@@ -33,6 +33,11 @@ type botState struct {
 	pausedUntil    time.Time
 	challengeCount atomic.Int64
 	startedAt      time.Time
+	lastSearchOK   atomic.Int64
+	lastDetailOK   atomic.Int64
+	lastGeminiOK   atomic.Int64
+	lastTelegramOK atomic.Int64
+	lastBackupOK   atomic.Int64
 	manualPaused   atomic.Bool // пульт: ⏹ Стоп
 }
 
@@ -42,6 +47,46 @@ func (s *botState) enterChallengePause(cfg *config.Config) {
 	s.challengeCount.Add(1)
 	s.pausedUntil = time.Now().Add(cfg.ChallengePause)
 	s.beat.SetState("challenge_pause")
+}
+
+func (s *botState) markLastSearchOK(t time.Time)   { storeUnixTime(&s.lastSearchOK, t) }
+func (s *botState) markLastDetailOK(t time.Time)   { storeUnixTime(&s.lastDetailOK, t) }
+func (s *botState) markLastGeminiOK(t time.Time)   { storeUnixTime(&s.lastGeminiOK, t) }
+func (s *botState) markLastTelegramOK(t time.Time) { storeUnixTime(&s.lastTelegramOK, t) }
+func (s *botState) markLastBackupOK(t time.Time)   { storeUnixTime(&s.lastBackupOK, t) }
+
+func (s *botState) LastSearchOK() time.Time   { return loadUnixTime(&s.lastSearchOK) }
+func (s *botState) LastDetailOK() time.Time   { return loadUnixTime(&s.lastDetailOK) }
+func (s *botState) LastGeminiOK() time.Time   { return loadUnixTime(&s.lastGeminiOK) }
+func (s *botState) LastTelegramOK() time.Time { return loadUnixTime(&s.lastTelegramOK) }
+func (s *botState) LastBackupOK() time.Time   { return loadUnixTime(&s.lastBackupOK) }
+
+func (s *botState) healthSnapshot(now time.Time) runtimeHealth {
+	return runtimeHealth{
+		Now:            now,
+		LastSearchOK:   s.LastSearchOK(),
+		LastDetailOK:   s.LastDetailOK(),
+		LastGeminiOK:   s.LastGeminiOK(),
+		LastTelegramOK: s.LastTelegramOK(),
+		LastBackupOK:   s.LastBackupOK(),
+	}
+}
+
+func storeUnixTime(dst *atomic.Int64, t time.Time) {
+	if dst != nil && !t.IsZero() {
+		dst.Store(t.Unix())
+	}
+}
+
+func loadUnixTime(src *atomic.Int64) time.Time {
+	if src == nil {
+		return time.Time{}
+	}
+	unix := src.Load()
+	if unix <= 0 {
+		return time.Time{}
+	}
+	return time.Unix(unix, 0)
 }
 
 func acquireSingleton(path string) (func(), error) {
@@ -106,8 +151,8 @@ func main() {
 	gemini := vision.NewGeminiClient(cfg.GeminiAPIKey, cfg.GeminiModel).SetLimits(cfg.GeminiConcurrency, cfg.GeminiDailyLimit)
 	tg := notifier.New(cfg.TelegramToken, cfg.TelegramChatID)
 	kp := collector.NewClient()
-	go telegramOutboxLoop(ctx, store, tg, log)
-	go dbBackupLoop(ctx, cfg, store, log)
+	go telegramOutboxLoop(ctx, store, tg, log, st)
+	go dbBackupLoop(ctx, cfg, store, log, st)
 
 	var csvExp *exporter.CSVExporter
 	if exp, err := exporter.NewCSV(cfg.CSVPath); err == nil {
@@ -164,7 +209,7 @@ func main() {
 	if tg.Enabled() {
 		rootDir, _ := os.Getwd()
 		panel := control.New(tg, cfg.TelegramToken, cfg.TelegramChatID, rootDir,
-			&st.manualPaused, st.startedAt, &st.challengeCount, fnl)
+			&st.manualPaused, st.startedAt, &st.challengeCount, fnl, st)
 		if panel != nil {
 			go panel.Run(ctx, log)
 		}
@@ -237,8 +282,8 @@ func digestLoop(ctx context.Context, cfg *config.Config, store *storage.Store,
 	}
 }
 
-func dbBackupLoop(ctx context.Context, cfg *config.Config, store *storage.Store, log *slog.Logger) {
-	runDBBackup(ctx, cfg, store, log)
+func dbBackupLoop(ctx context.Context, cfg *config.Config, store *storage.Store, log *slog.Logger, st *botState) {
+	runDBBackup(ctx, cfg, store, log, st)
 	t := time.NewTicker(time.Hour)
 	defer t.Stop()
 	for {
@@ -246,16 +291,19 @@ func dbBackupLoop(ctx context.Context, cfg *config.Config, store *storage.Store,
 		case <-ctx.Done():
 			return
 		case <-t.C:
-			runDBBackup(ctx, cfg, store, log)
+			runDBBackup(ctx, cfg, store, log, st)
 		}
 	}
 }
 
-func runDBBackup(ctx context.Context, cfg *config.Config, store *storage.Store, log *slog.Logger) {
+func runDBBackup(ctx context.Context, cfg *config.Config, store *storage.Store, log *slog.Logger, st *botState) {
 	res, err := store.BackupDaily(ctx, cfg.DBBackupDir, time.Now())
 	if err != nil {
 		log.Error("sqlite backup failed", "dir", cfg.DBBackupDir, "err", err)
 		return
+	}
+	if st != nil {
+		st.markLastBackupOK(time.Now())
 	}
 	if res.Created {
 		log.Info("sqlite backup created", "path", res.Path)
@@ -293,8 +341,15 @@ func sendDigest(ctx context.Context, cfg *config.Config, store *storage.Store,
 	if err != nil {
 		log.Warn("дайджест: telegram outbox", "err", err)
 	}
+	now := time.Now()
+	health := st.healthSnapshot(now)
+	if lastTelegram, err := store.LastTelegramDelivery(ctx); err == nil && lastTelegram.After(health.LastTelegramOK) {
+		health.LastTelegramOK = lastTelegram
+	} else if err != nil {
+		log.Warn("digest: last telegram delivery", "err", err)
+	}
 	text := digestText(time.Since(st.startedAt), byStatus, st.challengeCount.Load(),
-		total, detailed, alerts, processStates, pendingOutbox)
+		total, detailed, alerts, processStates, pendingOutbox, health)
 	if err := tg.SendRaw(ctx, text); err != nil {
 		log.Error("дайджест: отправка", "err", err)
 	} else {
@@ -339,6 +394,7 @@ func pollOnce(ctx context.Context, kp *collector.Client, store *storage.Store, c
 		return
 	}
 
+	st.markLastSearchOK(time.Now())
 	for _, ad := range ads {
 		if ctx.Err() != nil {
 			return
@@ -425,6 +481,7 @@ func processDueListings(ctx context.Context, kp *collector.Client, store *storag
 				_ = store.RetryProcess(ctx, l.AdID, models.ProcessDetailPending, reason)
 				continue
 			}
+			st.markLastDetailOK(time.Now())
 
 			price := l.Price
 			cur := models.NormalizeCurrency(l.Currency)
@@ -453,13 +510,16 @@ func processDueListings(ctx context.Context, kp *collector.Client, store *storag
 			}
 			_ = store.MarkProcessState(ctx, l.AdID, models.ProcessEvaluating)
 			out := funnel.Run(ctx, fnl, cfg, gem, log, ad, detail)
+			if lastGemini := gem.LastSuccess(); !lastGemini.IsZero() {
+				st.markLastGeminiOK(lastGemini)
+			}
 			if out.AlertText != "" {
 				if err := store.SaveFunnelAlertPending(ctx, l.AdID, out.Audit, out.AlertText, out.AlertURL, out.Status); err != nil {
 					log.Error("funnel alert outbox", "ad_id", l.AdID, "err", err)
 					_ = store.RetryProcess(ctx, l.AdID, models.ProcessEvaluating, err.Error())
 					continue
 				}
-				drainTelegramOutbox(ctx, store, tg, log, 8)
+				drainTelegramOutbox(ctx, store, tg, log, st, 8)
 			} else if err := store.SaveFunnelVerdict(ctx, l.AdID, out.Audit, out.Status); err != nil {
 				log.Error("funnel verdict", "ad_id", l.AdID, "err", err)
 				_ = store.RetryProcess(ctx, l.AdID, models.ProcessEvaluating, err.Error())
@@ -470,7 +530,7 @@ func processDueListings(ctx context.Context, kp *collector.Client, store *storag
 	}
 }
 
-func drainTelegramOutbox(ctx context.Context, store *storage.Store, tg *notifier.Telegram, log *slog.Logger, limit int) {
+func drainTelegramOutbox(ctx context.Context, store *storage.Store, tg *notifier.Telegram, log *slog.Logger, st *botState, limit int) {
 	items, err := store.ClaimTelegramOutbox(ctx, limit, 2*time.Minute)
 	if err != nil {
 		log.Error("telegram outbox: claim", "err", err)
@@ -491,12 +551,15 @@ func drainTelegramOutbox(ctx context.Context, store *storage.Store, tg *notifier
 			_ = store.RetryTelegramOutbox(ctx, it.ID, err.Error())
 			continue
 		}
+		if st != nil {
+			st.markLastTelegramOK(time.Now())
+		}
 		log.Info("telegram outbox: sent", "id", it.ID, "ad_id", it.AdID, "status", it.FinalStatus)
 	}
 }
 
-func telegramOutboxLoop(ctx context.Context, store *storage.Store, tg *notifier.Telegram, log *slog.Logger) {
-	drainTelegramOutbox(ctx, store, tg, log, 20)
+func telegramOutboxLoop(ctx context.Context, store *storage.Store, tg *notifier.Telegram, log *slog.Logger, st *botState) {
+	drainTelegramOutbox(ctx, store, tg, log, st, 20)
 	ticker := time.NewTicker(30 * time.Second)
 	defer ticker.Stop()
 	for {
@@ -504,7 +567,7 @@ func telegramOutboxLoop(ctx context.Context, store *storage.Store, tg *notifier.
 		case <-ctx.Done():
 			return
 		case <-ticker.C:
-			drainTelegramOutbox(ctx, store, tg, log, 20)
+			drainTelegramOutbox(ctx, store, tg, log, st, 20)
 		}
 	}
 }

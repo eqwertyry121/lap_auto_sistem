@@ -70,7 +70,14 @@ func TestDigestText(t *testing.T) {
 		Currency: "EUR",
 	}}
 	processStates := map[string]int{"DETAIL_PENDING": 2, "DONE": 20}
-	text := digestText(25*time.Hour+13*time.Minute, byStatus, 4, 24677, 858, alerts, processStates, 1)
+	now := time.Date(2026, 8, 11, 12, 0, 0, 0, time.UTC)
+	health := runtimeHealth{
+		Now:            now,
+		LastSearchOK:   now.Add(-5 * time.Minute),
+		LastDetailOK:   now.Add(-12 * time.Minute),
+		LastTelegramOK: now.Add(-20 * time.Minute),
+	}
+	text := digestText(25*time.Hour+13*time.Minute, byStatus, 4, 24677, 858, alerts, processStates, 1, health)
 
 	for _, want := range []string{
 		"Лоты за 24ч:</b> 15",
@@ -80,6 +87,11 @@ func TestDigestText(t *testing.T) {
 		"3.5%",
 		"DETAIL_PENDING: 2",
 		"telegram_outbox: 1",
+		"search_ok: 5m0s",
+		"detail_ok: 12m0s",
+		"gemini_ok: never",
+		"telegram_ok: 20m0s",
+		"backup_ok: never",
 		"€240",
 	} {
 		if !strings.Contains(text, want) {

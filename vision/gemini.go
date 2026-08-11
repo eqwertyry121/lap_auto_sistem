@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"strconv"
 	"sync"
+	"sync/atomic"
 	"time"
 )
 
@@ -27,6 +28,7 @@ type GeminiClient struct {
 	http    *http.Client
 	limiter *geminiLimiter
 	circuit *geminiCircuit
+	stats   *geminiStats
 }
 
 type geminiLimiter struct {
@@ -43,6 +45,10 @@ type geminiCircuit struct {
 	reason string
 }
 
+type geminiStats struct {
+	lastOKUnix atomic.Int64
+}
+
 func NewGeminiClient(apiKey, model string) *GeminiClient {
 	if model == "" {
 		model = "gemini-2.5-flash-lite"
@@ -52,10 +58,22 @@ func NewGeminiClient(apiKey, model string) *GeminiClient {
 		model:   model,
 		http:    &http.Client{Timeout: 90 * time.Second},
 		circuit: &geminiCircuit{},
+		stats:   &geminiStats{},
 	}
 }
 
 func (g *GeminiClient) Model() string { return g.model }
+
+func (g *GeminiClient) LastSuccess() time.Time {
+	if g == nil || g.stats == nil {
+		return time.Time{}
+	}
+	unix := g.stats.lastOKUnix.Load()
+	if unix <= 0 {
+		return time.Time{}
+	}
+	return time.Unix(unix, 0)
+}
 
 func (g *GeminiClient) SetLimits(concurrency, dailyLimit int) *GeminiClient {
 	if g == nil {
@@ -248,6 +266,9 @@ func (g *GeminiClient) call(ctx context.Context, req request) (*response, error)
 	}
 	if statusCode != http.StatusOK {
 		return nil, fmt.Errorf("gemini: HTTP %d: %s", statusCode, truncate(string(raw), 300))
+	}
+	if g.stats != nil {
+		g.stats.lastOKUnix.Store(time.Now().Unix())
 	}
 	return &gr, nil
 }

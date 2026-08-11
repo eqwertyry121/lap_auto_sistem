@@ -31,10 +31,20 @@ func nextDigestTime(now time.Time, h, m int) time.Time {
 	return target
 }
 
+type runtimeHealth struct {
+	Now            time.Time
+	LastSearchOK   time.Time
+	LastDetailOK   time.Time
+	LastGeminiOK   time.Time
+	LastTelegramOK time.Time
+	LastBackupOK   time.Time
+}
+
 // digestText собирает HTML-текст дайджеста. challenges — счётчик с момента
 // запуска (за 24ч не обнуляется — честнее писать как есть).
 func digestText(uptime time.Duration, byStatus map[string]int, challenges int64,
-	total, detailed int, alerts []models.Listing, processStates map[string]int, pendingOutbox int) string {
+	total, detailed int, alerts []models.Listing, processStates map[string]int, pendingOutbox int,
+	health runtimeHealth) string {
 	var b strings.Builder
 	b.WriteString("📊 <b>Дайджест KP-бота</b>\n\n")
 	fmt.Fprintf(&b, "<b>Аптайм:</b> %s\n", uptime.Round(time.Minute))
@@ -56,6 +66,17 @@ func digestText(uptime time.Duration, byStatus map[string]int, challenges int64,
 		fmt.Fprintf(&b, "<b>Покрытие рынка:</b> %d/%d деталей (%.1f%%)\n",
 			detailed, total, 100*float64(detailed)/float64(total))
 	}
+
+	now := health.Now
+	if now.IsZero() {
+		now = time.Now()
+	}
+	b.WriteString("<b>Health:</b>\n")
+	fmt.Fprintf(&b, "  - search_ok: %s\n", healthAge(now, health.LastSearchOK))
+	fmt.Fprintf(&b, "  - detail_ok: %s\n", healthAge(now, health.LastDetailOK))
+	fmt.Fprintf(&b, "  - gemini_ok: %s\n", healthAge(now, health.LastGeminiOK))
+	fmt.Fprintf(&b, "  - telegram_ok: %s\n", healthAge(now, health.LastTelegramOK))
+	fmt.Fprintf(&b, "  - backup_ok: %s\n", healthAge(now, health.LastBackupOK))
 
 	if pendingOutbox > 0 || hasQueueBacklog(processStates) {
 		b.WriteString("<b>Очереди:</b>\n")
@@ -86,6 +107,16 @@ func hasQueueBacklog(processStates map[string]int) bool {
 		}
 	}
 	return false
+}
+
+func healthAge(now, t time.Time) string {
+	if t.IsZero() {
+		return "never"
+	}
+	if t.After(now) {
+		return "0s"
+	}
+	return now.Sub(t).Round(time.Minute).String()
 }
 
 func truncateLine(s string, n int) string {

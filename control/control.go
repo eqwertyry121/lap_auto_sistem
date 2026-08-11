@@ -28,6 +28,14 @@ type MarketProvider interface {
 	MarketOnly() *pricing.Market
 }
 
+type RuntimeHealthProvider interface {
+	LastSearchOK() time.Time
+	LastDetailOK() time.Time
+	LastGeminiOK() time.Time
+	LastTelegramOK() time.Time
+	LastBackupOK() time.Time
+}
+
 // Panel — состояние пульта.
 type Panel struct {
 	tg      *notifier.Telegram
@@ -38,18 +46,19 @@ type Panel struct {
 	started time.Time
 	chCount *atomic.Int64
 	market  MarketProvider
+	health  RuntimeHealthProvider
 }
 
 // New создаёт пульт. chatID не распознан → пульт отключён (nil).
 func New(tg *notifier.Telegram, token, chatIDStr, root string, running *atomic.Bool,
-	started time.Time, chCount *atomic.Int64, market MarketProvider) *Panel {
+	started time.Time, chCount *atomic.Int64, market MarketProvider, health RuntimeHealthProvider) *Panel {
 	chatID, err := strconv.ParseInt(strings.TrimSpace(chatIDStr), 10, 64)
 	if err != nil || chatID == 0 {
 		return nil
 	}
 	return &Panel{
 		tg: tg, token: token, chatID: chatID, root: root,
-		running: running, started: started, chCount: chCount, market: market,
+		running: running, started: started, chCount: chCount, market: market, health: health,
 	}
 }
 
@@ -239,6 +248,15 @@ func (p *Panel) status(ctx context.Context) {
 	if p.chCount != nil {
 		fmt.Fprintf(&b, "Челленджей KP с запуска: %d\n", p.chCount.Load())
 	}
+	if p.health != nil {
+		now := time.Now()
+		fmt.Fprintf(&b, "\nHealth:\n")
+		fmt.Fprintf(&b, "search_ok: %s\n", runtimeAge(now, p.health.LastSearchOK()))
+		fmt.Fprintf(&b, "detail_ok: %s\n", runtimeAge(now, p.health.LastDetailOK()))
+		fmt.Fprintf(&b, "gemini_ok: %s\n", runtimeAge(now, p.health.LastGeminiOK()))
+		fmt.Fprintf(&b, "telegram_ok: %s\n", runtimeAge(now, p.health.LastTelegramOK()))
+		fmt.Fprintf(&b, "backup_ok: %s\n", runtimeAge(now, p.health.LastBackupOK()))
+	}
 	for _, name := range []string{"kpbot", "research"} {
 		path := filepath.Join(p.root, "data", name+".heartbeat")
 		if data, err := os.ReadFile(path); err == nil {
@@ -324,6 +342,16 @@ func truncateCtl(s string, n int) string {
 		return s
 	}
 	return string(r[:n-1]) + "…"
+}
+
+func runtimeAge(now, t time.Time) string {
+	if t.IsZero() {
+		return "never"
+	}
+	if t.After(now) {
+		return "0s"
+	}
+	return now.Sub(t).Round(time.Minute).String()
 }
 
 func fileMTime(path string) time.Time {

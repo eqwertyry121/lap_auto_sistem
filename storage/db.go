@@ -569,6 +569,15 @@ func (s *Store) PendingTelegramOutbox(ctx context.Context) (int, error) {
 	return n, err
 }
 
+func (s *Store) LastTelegramDelivery(ctx context.Context) (time.Time, error) {
+	var sent sql.NullInt64
+	err := s.db.QueryRowContext(ctx, `SELECT MAX(sent_at) FROM telegram_outbox WHERE sent_at > 0`).Scan(&sent)
+	if err != nil || !sent.Valid || sent.Int64 <= 0 {
+		return time.Time{}, err
+	}
+	return time.Unix(sent.Int64, 0), nil
+}
+
 func (s *Store) CountByProcessState(ctx context.Context) (map[string]int, error) {
 	rows, err := s.db.QueryContext(ctx,
 		`SELECT process_state, COUNT(*) FROM market_listings WHERE process_state != '' GROUP BY process_state`)
