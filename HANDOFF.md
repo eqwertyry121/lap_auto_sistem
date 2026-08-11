@@ -259,7 +259,7 @@ Go-бот ищет недооценённые ноутбуки на KupujemProda
   конфигурацию, медиану (n), отклонение и альтернативы. Аудит в
   `market_listings` (verdict_code/deviation/group_n/alternatives), счётчики
   в `funnel_stats`. Пороги — env: DIAMOND_DEV_PCT=−15, SUSPECT_DEV_PCT=−40,
-  DIAMOND_MIN_N=5; теневой режим — FUNNEL_SHADOW=1 (аудит без алертов).
+  DIAMOND_MIN_N=5.
   Рыночная модель обновляется раз в 6ч (MARKET_REFRESH_MIN), курс живой.
 - **Пульт управления в Telegram (упрощён до трёх кнопок):** ▶️ Старт /
   ⏹ Стоп / 🩺 Статус. Стоп приостанавливает поллинг и воронку (процесс
@@ -297,8 +297,8 @@ Go-бот ищет недооценённые ноутбуки на KupujemProda
   `research_specs.source='gemini-text'`, защита Gemini-строк от перезатирания
   regex-проходом (`-enrich` их не трогает).
 - **Фаза 6 — готова:** курс RSD→EUR (open.er-api.com, кэш в `kv` 24ч,
-  fallback 117.2; frankfurter RSD не отдаёт — проверено), JSONL-очередь
-  алертов при сбое Telegram (`data/alert_queue.jsonl`, доотправка),
+  fallback 117.2; frankfurter RSD не отдаёт — проверено), durable Telegram
+  outbox в `kp_bot.db` (`telegram_outbox`, доотправка до финального статуса),
   планировщик Windows: «KPBot Watchdog» (10 мин), «KPBot Research Refresh»
   (вс 03:17), «KPBot HWDB Monthly» (1-е число 04:23).
 
@@ -306,15 +306,15 @@ Go-бот ищет недооценённые ноутбуки на KupujemProda
 
 | Процесс | Что делает | Лог |
 |---|---|---|
-| `kpbot.exe` | живой бот с воронкой L0–L5: поллинг KP → детерминированные вердикты → алерты 💎/⚠️; Gemini только ступень L3; пульт управления в Telegram; дайджест 09:00; очередь алертов | `data/bot.log` |
+| `kpbot.exe` | живой бот с воронкой L0–L5: поллинг KP → детерминированные вердикты → DB outbox → алерты 💎/⚠️; Gemini только ступень L3; пульт управления в Telegram; дайджест 09:00 | `data/bot.log` |
 | `research.exe` | докачка деталей рынка, инкрементально, ~100–150 шт/час из-за антибота KP; на старте сам залечивает битые строки | `data/research_details.log` |
-| Task Scheduler «KPBot Watchdog» | каждые 10 мин проверяет свежесть heartbeat-файлов и перезапускает зависшее/мёртвое | `data/watchdog.log` |
+| Task Scheduler «KPBot Watchdog» | каждые 10 мин проверяет свежесть `kpbot.heartbeat` и перезапускает зависший/мёртвый бот; `research` только при `KP_WATCHDOG_RESEARCH=1` | `data/watchdog.log` |
 
 Ручной перезапуск (если нужно, из корня проекта) — лучше через watchdog:
 
 ```powershell
-Stop-Process -Name kpbot,research -ErrorAction SilentlyContinue
-Remove-Item data\kpbot.heartbeat,data\research.heartbeat -Force
+Stop-Process -Name kpbot -ErrorAction SilentlyContinue
+Remove-Item data\kpbot.heartbeat -Force
 powershell -NoProfile -ExecutionPolicy Bypass -File tools\watchdog.ps1
 ```
 
@@ -353,7 +353,8 @@ KP иногда отвечает на /eds/ кодом 200 с ПУСТЫМ info 
 - `research.csv` — выгрузка датасета (`go run ./cmd/research -dump-only`).
 - `market_history.csv` — батч-экспорт бота.
 - `kpbot.heartbeat` / `research.heartbeat` / `watchdog.log` — живость.
-- `alert_queue.jsonl` — появляется только при сбое Telegram.
+- `telegram_outbox` в `kp_bot.db` — durable очередь Telegram; статус лота
+  становится финальным только после успешной отправки.
 
 ## Ключевые команды
 

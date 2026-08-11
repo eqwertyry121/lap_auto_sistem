@@ -8,8 +8,16 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"strconv"
 	"sync"
 	"time"
+)
+
+var (
+	geminiMaxAttempts    = 3
+	geminiRetryBaseDelay = 750 * time.Millisecond
+	geminiRetryMaxDelay  = 5 * time.Second
+	geminiCooldownDelay  = 2 * time.Minute
 )
 
 // GeminiClient — минимальный REST-клиент Gemini (generateContent), без SDK.
@@ -18,6 +26,7 @@ type GeminiClient struct {
 	model   string
 	http    *http.Client
 	limiter *geminiLimiter
+	circuit *geminiCircuit
 }
 
 type geminiLimiter struct {
@@ -28,14 +37,21 @@ type geminiLimiter struct {
 	calls      int
 }
 
+type geminiCircuit struct {
+	mu     sync.Mutex
+	until  time.Time
+	reason string
+}
+
 func NewGeminiClient(apiKey, model string) *GeminiClient {
 	if model == "" {
 		model = "gemini-2.5-flash-lite"
 	}
 	return &GeminiClient{
-		apiKey: apiKey,
-		model:  model,
-		http:   &http.Client{Timeout: 90 * time.Second},
+		apiKey:  apiKey,
+		model:   model,
+		http:    &http.Client{Timeout: 90 * time.Second},
+		circuit: &geminiCircuit{},
 	}
 }
 
@@ -202,6 +218,9 @@ func (g *GeminiClient) GenerateWithSearch(ctx context.Context, system string, pa
 
 // call выполняет HTTP-запрос generateContent и разбирает конверт ответа.
 func (g *GeminiClient) call(ctx context.Context, req request) (*response, error) {
+	if err := g.circuitErr(); err != nil {
+		return nil, err
+	}
 	release, err := g.acquire(ctx)
 	if err != nil {
 		return nil, err
@@ -214,35 +233,162 @@ func (g *GeminiClient) call(ctx context.Context, req request) (*response, error)
 	}
 
 	url := fmt.Sprintf("https://generativelanguage.googleapis.com/v1beta/models/%s:generateContent", g.model)
-	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(body))
+	raw, statusCode, err := g.postGenerate(ctx, url, body)
 	if err != nil {
 		return nil, err
 	}
-	httpReq.Header.Set("Content-Type", "application/json")
-	httpReq.Header.Set("x-goog-api-key", g.apiKey)
-
-	resp, err := g.http.Do(httpReq)
-	if err != nil {
-		return nil, fmt.Errorf("gemini: запрос: %w", err)
-	}
-	defer resp.Body.Close()
-
-	raw, err := io.ReadAll(io.LimitReader(resp.Body, 8<<20))
-	if err != nil {
-		return nil, fmt.Errorf("gemini: чтение ответа: %w", err)
-	}
+	g.recordCircuit(statusCode)
 
 	var gr response
 	if err := json.Unmarshal(raw, &gr); err != nil {
-		return nil, fmt.Errorf("gemini: decode (HTTP %d): %w", resp.StatusCode, err)
+		return nil, fmt.Errorf("gemini: decode (HTTP %d): %w", statusCode, err)
 	}
 	if gr.Error != nil {
 		return nil, fmt.Errorf("gemini: API error %d: %s", gr.Error.Code, gr.Error.Message)
 	}
-	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("gemini: HTTP %d: %s", resp.StatusCode, truncate(string(raw), 300))
+	if statusCode != http.StatusOK {
+		return nil, fmt.Errorf("gemini: HTTP %d: %s", statusCode, truncate(string(raw), 300))
 	}
 	return &gr, nil
+}
+
+func (g *GeminiClient) postGenerate(ctx context.Context, url string, body []byte) ([]byte, int, error) {
+	attempts := geminiMaxAttempts
+	if attempts <= 0 {
+		attempts = 1
+	}
+	var lastErr error
+	for attempt := 1; attempt <= attempts; attempt++ {
+		httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(body))
+		if err != nil {
+			return nil, 0, err
+		}
+		httpReq.Header.Set("Content-Type", "application/json")
+		httpReq.Header.Set("x-goog-api-key", g.apiKey)
+
+		resp, err := g.http.Do(httpReq)
+		if err != nil {
+			lastErr = fmt.Errorf("gemini: запрос: %w", err)
+			if ctx.Err() != nil || attempt == attempts {
+				return nil, 0, lastErr
+			}
+			if err := sleepContext(ctx, geminiRetryDelay(attempt, 0)); err != nil {
+				return nil, 0, err
+			}
+			continue
+		}
+
+		retryAfter := parseRetryAfter(resp.Header.Get("Retry-After"))
+		raw, readErr := io.ReadAll(io.LimitReader(resp.Body, 8<<20))
+		closeErr := resp.Body.Close()
+		if readErr != nil {
+			lastErr = fmt.Errorf("gemini: чтение ответа: %w", readErr)
+			if attempt == attempts {
+				return nil, resp.StatusCode, lastErr
+			}
+			if err := sleepContext(ctx, geminiRetryDelay(attempt, retryAfter)); err != nil {
+				return nil, 0, err
+			}
+			continue
+		}
+		if closeErr != nil {
+			lastErr = fmt.Errorf("gemini: закрытие ответа: %w", closeErr)
+			if attempt == attempts {
+				return nil, resp.StatusCode, lastErr
+			}
+			if err := sleepContext(ctx, geminiRetryDelay(attempt, retryAfter)); err != nil {
+				return nil, 0, err
+			}
+			continue
+		}
+		if !geminiRetryableStatus(resp.StatusCode) || attempt == attempts {
+			return raw, resp.StatusCode, nil
+		}
+		if err := sleepContext(ctx, geminiRetryDelay(attempt, retryAfter)); err != nil {
+			return nil, 0, err
+		}
+	}
+	return nil, 0, lastErr
+}
+
+func geminiRetryableStatus(status int) bool {
+	switch status {
+	case http.StatusTooManyRequests, http.StatusInternalServerError, http.StatusBadGateway, http.StatusServiceUnavailable, http.StatusGatewayTimeout:
+		return true
+	default:
+		return false
+	}
+}
+
+func geminiRetryDelay(attempt int, retryAfter time.Duration) time.Duration {
+	if retryAfter > 0 && retryAfter <= geminiRetryMaxDelay {
+		return retryAfter
+	}
+	delay := geminiRetryBaseDelay << max(attempt-1, 0)
+	if delay > geminiRetryMaxDelay {
+		return geminiRetryMaxDelay
+	}
+	return delay
+}
+
+func parseRetryAfter(v string) time.Duration {
+	if v == "" {
+		return 0
+	}
+	if seconds, err := strconv.Atoi(v); err == nil && seconds > 0 {
+		return time.Duration(seconds) * time.Second
+	}
+	if when, err := http.ParseTime(v); err == nil {
+		return time.Until(when)
+	}
+	return 0
+}
+
+func sleepContext(ctx context.Context, d time.Duration) error {
+	if d <= 0 {
+		return nil
+	}
+	t := time.NewTimer(d)
+	defer t.Stop()
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-t.C:
+		return nil
+	}
+}
+
+func (g *GeminiClient) circuitErr() error {
+	if g == nil || g.circuit == nil {
+		return nil
+	}
+	g.circuit.mu.Lock()
+	defer g.circuit.mu.Unlock()
+	if g.circuit.until.IsZero() || time.Now().After(g.circuit.until) {
+		return nil
+	}
+	return fmt.Errorf("gemini: cooldown until %s after %s", g.circuit.until.Format(time.RFC3339), g.circuit.reason)
+}
+
+func (g *GeminiClient) recordCircuit(status int) {
+	if g == nil || g.circuit == nil {
+		return
+	}
+	g.circuit.mu.Lock()
+	defer g.circuit.mu.Unlock()
+	if status == http.StatusOK {
+		g.circuit.until = time.Time{}
+		g.circuit.reason = ""
+		return
+	}
+	if !geminiRetryableStatus(status) {
+		return
+	}
+	until := time.Now().Add(geminiCooldownDelay)
+	if until.After(g.circuit.until) {
+		g.circuit.until = until
+		g.circuit.reason = fmt.Sprintf("HTTP %d", status)
+	}
 }
 
 // textOf собирает текст ответа из parts кандидата.

@@ -359,32 +359,6 @@ func (s *Store) UpdateDetails(ctx context.Context, adID int64, description, sell
 	return err
 }
 
-// SaveVerdict пишет вердикт Gemini (старый путь оценки).
-func (s *Store) SaveVerdict(ctx context.Context, adID int64, v models.Verdict, st models.Status) error {
-	_, err := s.db.ExecContext(ctx,
-		`UPDATE market_listings SET is_deal = ?, need_check = ?, model_found = ?, estimated_profit = ?, reason = ?, specs = ?, status = ?, process_state = ?, lease_until = 0 WHERE ad_id = ?`,
-		boolInt(v.IsDeal), boolInt(v.NeedCheck), boolInt(v.ModelFound), v.EstimatedProfit, v.Reason, v.Specs, string(st), processStateForStatus(st), adID)
-	return err
-}
-
-func (s *Store) SaveVerdictAlertPending(ctx context.Context, adID int64, v models.Verdict, text, url string, finalStatus models.Status) error {
-	tx, err := s.db.BeginTx(ctx, nil)
-	if err != nil {
-		return err
-	}
-	defer tx.Rollback()
-	if _, err := tx.ExecContext(ctx,
-		`UPDATE market_listings SET is_deal = ?, need_check = ?, model_found = ?, estimated_profit = ?, reason = ?, specs = ?, status = ?, process_state = ?, lease_until = 0 WHERE ad_id = ?`,
-		boolInt(v.IsDeal), boolInt(v.NeedCheck), boolInt(v.ModelFound), v.EstimatedProfit, v.Reason, v.Specs,
-		string(models.ProcessAlertPending), string(models.ProcessAlertPending), adID); err != nil {
-		return err
-	}
-	if err := enqueueOutboxTx(ctx, tx, adID, "verdict", text, url, finalStatus); err != nil {
-		return err
-	}
-	return tx.Commit()
-}
-
 // FunnelVerdict — аудит детерминированного вердикта воронки (PLAN_v4 §4.4).
 type FunnelVerdict struct {
 	Code         string  // DIAMOND / DIAMOND_SUSPECT / FAIR / EXPENSIVE / CHECK / MANUAL / SHOP / JUNK / SANITY
@@ -419,14 +393,6 @@ func (s *Store) SaveFunnelAlertPending(ctx context.Context, adID int64, v Funnel
 		return err
 	}
 	return tx.Commit()
-}
-
-// SaveFunnelAudit — только аудит, статус не трогается (теневой режим).
-func (s *Store) SaveFunnelAudit(ctx context.Context, adID int64, v FunnelVerdict) error {
-	_, err := s.db.ExecContext(ctx,
-		`UPDATE market_listings SET verdict_code = ?, deviation = ?, group_n = ?, alternatives = ?, reason = ?, specs = ? WHERE ad_id = ?`,
-		v.Code, v.Deviation, v.GroupN, v.Alternatives, v.Reason, v.Specs, adID)
-	return err
 }
 
 type TelegramOutboxItem struct {
@@ -743,11 +709,4 @@ func timeFromUnix(v int64) time.Time {
 		return time.Time{}
 	}
 	return time.Unix(v, 0)
-}
-
-func boolInt(b bool) int {
-	if b {
-		return 1
-	}
-	return 0
 }

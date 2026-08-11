@@ -876,26 +876,29 @@ func geminiPhotoSpecs(ctx context.Context, gem *vision.GeminiClient, title, desc
 		"Заголовок: %s\nОписание: %s\n\nМодель не удалось определить по тексту. Внимательно рассмотри наклейки процессора, шильдики на дне, гравировки модели и скриншоты характеристик, которые часто лежат в конце галереи.",
 		title, truncateRunes(descPlain, 800))
 	parts := []vision.Part{{Text: note}}
-	var mu sync.Mutex
 	var wg sync.WaitGroup
-	for _, ph := range photos {
+	downloaded := make([]*vision.Part, len(photos))
+	for i, ph := range photos {
 		u := ph.BestURL()
 		if u == "" {
 			continue
 		}
 		wg.Add(1)
-		go func(u string) {
+		go func(i int, u string) {
 			defer wg.Done()
 			p, err := gem.ImageToPart(ctx, u)
 			if err != nil {
 				return
 			}
-			mu.Lock()
-			parts = append(parts, *p)
-			mu.Unlock()
-		}(u)
+			downloaded[i] = p
+		}(i, u)
 	}
 	wg.Wait()
+	for _, p := range downloaded {
+		if p != nil {
+			parts = append(parts, *p)
+		}
+	}
 	if len(parts) == 1 {
 		return specs.GeminiSpecs{}, note, "", fmt.Errorf("фото не скачались")
 	}

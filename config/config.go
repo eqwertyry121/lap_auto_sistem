@@ -29,9 +29,6 @@ type Config struct {
 	CSVPath        string
 	ExportInterval time.Duration
 
-	PriceCacheRefresh time.Duration
-	PriceCacheDays    int
-
 	// Фаза 0 (PLAN_v4): надёжность и наблюдаемость.
 	ChallengePause time.Duration // пауза при антибот-челлендже KP на поиске
 	HeartbeatPath  string        // файл живости для watchdog
@@ -39,11 +36,7 @@ type Config struct {
 	DigestAt       string // время дневного дайджеста, «HH:MM»
 	ResearchDBPath string // датасет рынка (read-only для дайджеста)
 
-	// Фаза 6 (PLAN_v4): автономность.
-	AlertQueuePath string // JSONL-очередь алертов на сбой Telegram
-
 	// Фаза 4 (PLAN_v4): воронка L0–L5 в живом боте.
-	FunnelShadow  bool          // FUNNEL_SHADOW=1: воронка пишет аудит, алерты — старый путь
 	FunnelTrace   bool          // FUNNEL_TRACE=0: выключить подробный журнал воронки
 	MarketRefresh time.Duration // MARKET_REFRESH_MIN: пересборка рыночной модели (по умолчанию 6ч)
 	DiamondDevPct int           // DIAMOND_DEV_PCT: порог «алмаза» в % от медианы (−15)
@@ -83,8 +76,6 @@ func Load() *Config {
 		TelegramChatID:    os.Getenv("TELEGRAM_CHAT_ID"),
 		CSVPath:           envStr("CSV_PATH", "data/market_history.csv"),
 		ExportInterval:    envDurationMin("EXPORT_INTERVAL_MIN", 30),
-		PriceCacheRefresh: envDurationMin("PRICE_CACHE_REFRESH_MIN", 30),
-		PriceCacheDays:    envInt("PRICE_CACHE_DAYS", 90),
 
 		ChallengePause: envDurationMin("CHALLENGE_PAUSE_MIN", 30),
 		HeartbeatPath:  envStr("HEARTBEAT_PATH", "data/kpbot.heartbeat"),
@@ -92,9 +83,6 @@ func Load() *Config {
 		DigestAt:       envStr("DIGEST_AT", "09:00"),
 		ResearchDBPath: envStr("RESEARCH_DB_PATH", "data/research.db"),
 
-		AlertQueuePath: envStr("ALERT_QUEUE_PATH", "data/alert_queue.jsonl"),
-
-		FunnelShadow:  envStr("FUNNEL_SHADOW", "") == "1",
 		FunnelTrace:   envStr("FUNNEL_TRACE", "1") == "1",
 		MarketRefresh: envDurationMin("MARKET_REFRESH_MIN", 360),
 		DiamondDevPct: envInt("DIAMOND_DEV_PCT", -15),
@@ -125,7 +113,6 @@ func (c *Config) Validate() error {
 		{"POLL_INTERVAL_SEC", c.PollInterval},
 		{"FETCH_DELAY_MS", c.FetchDelay},
 		{"EXPORT_INTERVAL_MIN", c.ExportInterval},
-		{"PRICE_CACHE_REFRESH_MIN", c.PriceCacheRefresh},
 		{"CHALLENGE_PAUSE_MIN", c.ChallengePause},
 		{"MARKET_REFRESH_MIN", c.MarketRefresh},
 	} {
@@ -138,9 +125,6 @@ func (c *Config) Validate() error {
 	}
 	if c.GeminiDailyLimit < 0 {
 		return fmt.Errorf("GEMINI_DAILY_LIMIT must be >= 0")
-	}
-	if c.PriceCacheDays <= 0 {
-		return fmt.Errorf("PRICE_CACHE_DAYS must be positive")
 	}
 	if c.DiamondMinN <= 0 {
 		return fmt.Errorf("DIAMOND_MIN_N must be positive")

@@ -9,6 +9,10 @@
 # written every minute from a dedicated goroutine, independent of
 # anti-bot pauses).
 #
+# Runtime behavior: watch kpbot only by default. research is opt-in via
+# KP_WATCHDOG_RESEARCH=1 because it can spend KP detail requests and should
+# normally run from an explicit schedule/manual command.
+#
 # Restart order: stop -> rotate logs -> start (a file held open by a live
 # process' redirected output cannot be renamed on Windows).
 #
@@ -28,6 +32,10 @@ $thresholdMin = @{ 'kpbot' = 3; 'research' = 15 }
 $exeName      = @{ 'kpbot' = 'kpbot.exe'; 'research' = 'research.exe' }
 $outLogName   = @{ 'kpbot' = 'bot.log'; 'research' = 'research_details.log' }
 $errLogName   = @{ 'kpbot' = 'bot.err.log'; 'research' = 'research_details.err.log' }
+$services     = @('kpbot')
+if ($env:KP_WATCHDOG_RESEARCH -eq '1') {
+    $services += 'research'
+}
 
 function Write-WatchLog([string]$msg) {
     $line = '{0} {1}' -f (Get-Date -Format 'yyyy-MM-dd HH:mm:ss'), $msg
@@ -48,7 +56,7 @@ function Restart-Service([string]$name) {
     Write-WatchLog "${name}: restarted (logs rotated)"
 }
 
-foreach ($name in @('kpbot', 'research')) {
+foreach ($name in $services) {
     $hb    = Join-Path $data "$name.heartbeat"
     $fresh = $false
     if (Test-Path $hb) {

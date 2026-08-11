@@ -49,11 +49,31 @@ func (h *Heartbeat) Run(ctx context.Context, interval time.Duration) {
 }
 
 func (h *Heartbeat) write() {
-	if dir := filepath.Dir(h.path); dir != "" && dir != "." {
+	dir := filepath.Dir(h.path)
+	if dir != "" && dir != "." {
 		_ = os.MkdirAll(dir, 0o755)
 	}
 	// Формат: unix-время + состояние. Watchdog проверяет свежесть по mtime
 	// файла, содержимое — диагностика для человека.
 	content := fmt.Sprintf("%d %s\n", time.Now().Unix(), h.State())
-	_ = os.WriteFile(h.path, []byte(content), 0o644)
+	tmp, err := os.CreateTemp(dir, filepath.Base(h.path)+".tmp-*")
+	if err != nil {
+		return
+	}
+	tmpName := tmp.Name()
+	if _, err := tmp.Write([]byte(content)); err != nil {
+		_ = tmp.Close()
+		_ = os.Remove(tmpName)
+		return
+	}
+	if err := tmp.Close(); err != nil {
+		_ = os.Remove(tmpName)
+		return
+	}
+	if err := os.Rename(tmpName, h.path); err != nil {
+		_ = os.Remove(h.path)
+		if err := os.Rename(tmpName, h.path); err != nil {
+			_ = os.Remove(tmpName)
+		}
+	}
 }

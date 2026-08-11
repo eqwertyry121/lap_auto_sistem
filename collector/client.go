@@ -7,6 +7,9 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"os"
+	"path/filepath"
+	"strconv"
 	"strings"
 	"sync/atomic"
 	"time"
@@ -69,6 +72,9 @@ func NewClient() *Client {
 
 // do выполняет GET к /api/web/v1/<pathWithQuery> с обязательной подписью.
 func (c *Client) do(ctx context.Context, pathWithQuery string) (*http.Response, error) {
+	if err := sharedCooldownErr(); err != nil {
+		return nil, err
+	}
 	url := models.BaseURL + pathWithQuery
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
 	if err != nil {
@@ -86,6 +92,105 @@ func (c *Client) do(ctx context.Context, pathWithQuery string) (*http.Response, 
 	req.Header.Set("x-kp-dark", "false")
 	req.Header.Set("x-kp-theme", "system")
 	return c.http.Do(req)
+}
+
+func recordSharedCooldown(err error) {
+	switch {
+	case errors.Is(err, ErrChallenge):
+		writeSharedCooldown("challenge", kpChallengeCooldown())
+	case errors.Is(err, ErrRateLimited):
+		writeSharedCooldown("rate", kpRateCooldown())
+	}
+}
+
+func sharedCooldownErr() error {
+	until, reason, ok := readSharedCooldown(cooldownPath())
+	if !ok {
+		return nil
+	}
+	if time.Now().After(until) {
+		_ = os.Remove(cooldownPath())
+		return nil
+	}
+	switch reason {
+	case "challenge":
+		return fmt.Errorf("%w: shared cooldown until %s", ErrChallenge, until.Format(time.RFC3339))
+	default:
+		return fmt.Errorf("%w: shared cooldown until %s", ErrRateLimited, until.Format(time.RFC3339))
+	}
+}
+
+func writeSharedCooldown(reason string, d time.Duration) {
+	if d <= 0 {
+		return
+	}
+	path := cooldownPath()
+	until := time.Now().Add(d)
+	if current, _, ok := readSharedCooldown(path); ok && current.After(until) {
+		return
+	}
+	dir := filepath.Dir(path)
+	if dir != "" && dir != "." {
+		_ = os.MkdirAll(dir, 0o755)
+	}
+	tmp, err := os.CreateTemp(dir, filepath.Base(path)+".tmp-*")
+	if err != nil {
+		return
+	}
+	tmpName := tmp.Name()
+	_, writeErr := fmt.Fprintf(tmp, "%d %s\n", until.Unix(), reason)
+	closeErr := tmp.Close()
+	if writeErr != nil || closeErr != nil {
+		_ = os.Remove(tmpName)
+		return
+	}
+	if err := os.Rename(tmpName, path); err != nil {
+		if current, _, ok := readSharedCooldown(path); ok && current.After(until) {
+			_ = os.Remove(tmpName)
+			return
+		}
+		_ = os.Remove(path)
+		if err := os.Rename(tmpName, path); err != nil {
+			_ = os.Remove(tmpName)
+		}
+	}
+}
+
+func readSharedCooldown(path string) (time.Time, string, bool) {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return time.Time{}, "", false
+	}
+	fields := strings.Fields(string(data))
+	if len(fields) < 2 {
+		return time.Time{}, "", false
+	}
+	unix, err := strconv.ParseInt(fields[0], 10, 64)
+	if err != nil || unix <= 0 {
+		return time.Time{}, "", false
+	}
+	return time.Unix(unix, 0), fields[1], true
+}
+
+func cooldownPath() string {
+	if v := os.Getenv("KP_COOLDOWN_PATH"); strings.TrimSpace(v) != "" {
+		return v
+	}
+	return filepath.Join("data", "kp_cooldown")
+}
+
+func kpRateCooldown() time.Duration {
+	if seconds, err := strconv.Atoi(os.Getenv("KP_RATE_COOLDOWN_SEC")); err == nil && seconds > 0 {
+		return time.Duration(seconds) * time.Second
+	}
+	return 90 * time.Second
+}
+
+func kpChallengeCooldown() time.Duration {
+	if minutes, err := strconv.Atoi(os.Getenv("KP_CHALLENGE_COOLDOWN_MIN")); err == nil && minutes > 0 {
+		return time.Duration(minutes) * time.Minute
+	}
+	return 30 * time.Minute
 }
 
 // decodeError разбирает тело ошибки KP вида {"success":false,"errors":[...]}.

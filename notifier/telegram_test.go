@@ -4,12 +4,8 @@ import (
 	"context"
 	"net/http"
 	"net/http/httptest"
-	"os"
-	"path/filepath"
 	"sync/atomic"
 	"testing"
-
-	"kpbot/models"
 )
 
 // fakeTG — тестовый Telegram-сервер: ok переключается атомарно.
@@ -44,40 +40,28 @@ func TestSendRawDirectReturnsMessageID(t *testing.T) {
 func newTestTG(t *testing.T, srv *httptest.Server) *Telegram {
 	t.Helper()
 	return &Telegram{
-		token:     "test-token",
-		chatID:    "42",
-		http:      srv.Client(),
-		queuePath: filepath.Join(t.TempDir(), "queue.jsonl"),
-		baseURL:   srv.URL,
+		token:   "test-token",
+		chatID:  "42",
+		http:    srv.Client(),
+		baseURL: srv.URL,
 	}
 }
 
-func TestSendFailureDoesNotCreateFileQueue(t *testing.T) {
+func TestSendRawDirectReturnsError(t *testing.T) {
 	var ok atomic.Bool
 	srv := fakeTG(t, &ok)
 	defer srv.Close()
 	tg := newTestTG(t, srv)
-	ctx := context.Background()
-
-	l := models.Listing{AdID: 1, Title: "Laptop", Price: 240, Currency: "EUR", URL: "https://kp/x"}
-	v := models.Verdict{IsDeal: true, EstimatedProfit: 60, Reason: "test", Specs: "i5"}
 
 	ok.Store(false)
-	if err := tg.SendAlert(ctx, l, v, "hint"); err == nil {
+	if _, err := tg.SendRawDirect(context.Background(), "<b>test</b>", "https://kp/x"); err == nil {
 		t.Fatal("ждал ошибку отправки")
-	}
-	if _, err := os.Stat(tg.queuePath); !os.IsNotExist(err) {
-		t.Fatalf("file queue must not be created anymore: err=%v", err)
 	}
 }
 
-func TestDryRunDoesNotQueue(t *testing.T) {
-	tg := &Telegram{queuePath: filepath.Join(t.TempDir(), "queue.jsonl")}
-	l := models.Listing{AdID: 1, Title: "Laptop", Price: 1, Currency: "EUR"}
-	if err := tg.SendAlert(context.Background(), l, models.Verdict{}, ""); err != nil {
+func TestDryRunSendRawDirectDoesNotFail(t *testing.T) {
+	tg := &Telegram{}
+	if _, err := tg.SendRawDirect(context.Background(), "<b>test</b>", "https://kp/x"); err != nil {
 		t.Fatalf("dry-run не должен падать: %v", err)
-	}
-	if _, err := os.Stat(tg.queuePath); !os.IsNotExist(err) {
-		t.Fatal("dry-run не должен создавать очередь")
 	}
 }

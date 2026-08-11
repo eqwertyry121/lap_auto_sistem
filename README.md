@@ -64,7 +64,7 @@ go run ./cmd/market-scan -max-pages 10
 go run .
 ```
 
-Бот стартует, обновит кэш цен, начнёт опрос KP и будет слать алерты в Telegram.
+Бот стартует, начнёт опрос KP и будет слать алерты в Telegram.
 `Ctrl+C` — корректная остановка (graceful shutdown).
 
 ---
@@ -79,15 +79,17 @@ go run .
 | `GEMINI_API_KEY` | — | **обязателен** для оценки |
 | `GEMINI_MODEL` | `gemini-2.5-flash-lite` | базовая модель Gemini |
 | `GEMINI_LITE_MODEL` | `gemini-2.5-flash-lite` | лёгкая модель для text/vision/search-ступеней |
-| `GEMINI_CONCURRENCY` | `5` | лимит параллельных оценок (worker pool) |
+| `GEMINI_CONCURRENCY` | `5` | лимит параллельных вызовов Gemini |
 | `GEMINI_DAILY_LIMIT` | `80` | дневной лимит вызовов Gemini; `0` явно снимает лимит |
 | `TELEGRAM_BOT_TOKEN` | — | токен бота (`@BotFather`) |
 | `TELEGRAM_CHAT_ID` | — | id чата/канала для алертов |
 | `CSV_PATH` | `data/market_history.csv` | файл CSV-экспорта рыночной базы |
 | `EXPORT_INTERVAL_MIN` | `30` | период батч-экспорта |
-| `PRICE_CACHE_REFRESH_MIN` | `30` | период обновления кэша цен |
-| `PRICE_CACHE_DAYS` | `90` | окно истории для кэша цен |
 | `LOCK_PATH` | `data/kpbot.lock` | singleton-lock, чтобы не запустить два экземпляра бота |
+| `KP_COOLDOWN_PATH` | `data/kp_cooldown` | общий cooldown bot/research после KP 429/challenge |
+| `KP_RATE_COOLDOWN_SEC` | `90` | длительность общего cooldown после KP 429 |
+| `KP_CHALLENGE_COOLDOWN_MIN` | `30` | длительность общего cooldown после KP anti-bot challenge |
+| `KP_WATCHDOG_RESEARCH` | `0` | `1` включает watchdog для `research.exe`; по умолчанию watchdog следит только за ботом |
 
 Если `TELEGRAM_*` не заданы — алерты печатаются в консоль (dry-run).
 CSV-экспорт работает всегда и не требует настройки (путь — `CSV_PATH`).
