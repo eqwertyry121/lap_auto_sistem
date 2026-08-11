@@ -53,53 +53,70 @@ type Config struct {
 	BannedModels []string // BANNED_MODELS: запрещённые линейки через запятую (macbook)
 	RequireDGPU  bool     // REQUIRE_DGPU=0: снять обязательность дискретной видеокарты
 	MarketTolPct int      // MARKET_TOL_PCT: «рыночная цена» = до +N% выше медианы (5)
+
+	parseErrors []string
 }
 
 // Load читает конфигурацию из переменных окружения (.env подхватывается автоматически).
 func Load() *Config {
 	_ = godotenv.Load() // .env не обязателен
-	baseGeminiModel := envStr("GEMINI_MODEL", "gemini-2.5-flash-lite")
-	liteGeminiModel := envStr("GEMINI_LITE_MODEL", "gemini-2.5-flash-lite")
+	r := envReader{lookup: os.LookupEnv}
+	return loadWithEnv(&r)
+}
 
-	return &Config{
-		PollInterval:      envDurationSec("POLL_INTERVAL_SEC", 45),
-		DBPath:            envStr("DB_PATH", "data/kp_bot.db"),
-		FetchDelay:        time.Duration(envInt("FETCH_DELAY_MS", 700)) * time.Millisecond,
-		GeminiAPIKey:      os.Getenv("GEMINI_API_KEY"),
+type envReader struct {
+	lookup func(string) (string, bool)
+	errors []string
+}
+
+func loadWithEnv(r *envReader) *Config {
+	baseGeminiModel := r.str("GEMINI_MODEL", "gemini-2.5-flash-lite")
+	liteGeminiModel := r.str("GEMINI_LITE_MODEL", "gemini-2.5-flash-lite")
+
+	cfg := &Config{
+		PollInterval:      r.durationSec("POLL_INTERVAL_SEC", 45),
+		DBPath:            r.str("DB_PATH", "data/kp_bot.db"),
+		FetchDelay:        time.Duration(r.int("FETCH_DELAY_MS", 700)) * time.Millisecond,
+		GeminiAPIKey:      r.raw("GEMINI_API_KEY"),
 		GeminiModel:       baseGeminiModel,
-		GeminiTextModel:   envStr("GEMINI_TEXT_MODEL", liteGeminiModel),
-		GeminiVisionModel: envStr("GEMINI_VISION_MODEL", liteGeminiModel),
-		GeminiSearchModel: envStr("GEMINI_SEARCH_MODEL", liteGeminiModel),
-		GeminiConcurrency: envInt("GEMINI_CONCURRENCY", 5),
-		GeminiDailyLimit:  envInt("GEMINI_DAILY_LIMIT", 80),
-		TelegramToken:     os.Getenv("TELEGRAM_BOT_TOKEN"),
-		TelegramChatID:    os.Getenv("TELEGRAM_CHAT_ID"),
-		CSVPath:           envStr("CSV_PATH", "data/market_history.csv"),
-		ExportInterval:    envDurationMin("EXPORT_INTERVAL_MIN", 30),
+		GeminiTextModel:   r.str("GEMINI_TEXT_MODEL", liteGeminiModel),
+		GeminiVisionModel: r.str("GEMINI_VISION_MODEL", liteGeminiModel),
+		GeminiSearchModel: r.str("GEMINI_SEARCH_MODEL", liteGeminiModel),
+		GeminiConcurrency: r.int("GEMINI_CONCURRENCY", 5),
+		GeminiDailyLimit:  r.int("GEMINI_DAILY_LIMIT", 80),
+		TelegramToken:     r.raw("TELEGRAM_BOT_TOKEN"),
+		TelegramChatID:    r.raw("TELEGRAM_CHAT_ID"),
+		CSVPath:           r.str("CSV_PATH", "data/market_history.csv"),
+		ExportInterval:    r.durationMin("EXPORT_INTERVAL_MIN", 30),
 
-		ChallengePause: envDurationMin("CHALLENGE_PAUSE_MIN", 30),
-		HeartbeatPath:  envStr("HEARTBEAT_PATH", "data/kpbot.heartbeat"),
-		LockPath:       envStr("LOCK_PATH", "data/kpbot.lock"),
-		DigestAt:       envStr("DIGEST_AT", "09:00"),
-		ResearchDBPath: envStr("RESEARCH_DB_PATH", "data/research.db"),
+		ChallengePause: r.durationMin("CHALLENGE_PAUSE_MIN", 30),
+		HeartbeatPath:  r.str("HEARTBEAT_PATH", "data/kpbot.heartbeat"),
+		LockPath:       r.str("LOCK_PATH", "data/kpbot.lock"),
+		DigestAt:       r.str("DIGEST_AT", "09:00"),
+		ResearchDBPath: r.str("RESEARCH_DB_PATH", "data/research.db"),
 
-		FunnelTrace:   envStr("FUNNEL_TRACE", "1") == "1",
-		MarketRefresh: envDurationMin("MARKET_REFRESH_MIN", 360),
-		DiamondDevPct: envInt("DIAMOND_DEV_PCT", -15),
-		SuspectDevPct: envInt("SUSPECT_DEV_PCT", -40),
-		DiamondMinN:   envInt("DIAMOND_MIN_N", 5),
+		FunnelTrace:   r.bool("FUNNEL_TRACE", true),
+		MarketRefresh: r.durationMin("MARKET_REFRESH_MIN", 360),
+		DiamondDevPct: r.int("DIAMOND_DEV_PCT", -15),
+		SuspectDevPct: r.int("SUSPECT_DEV_PCT", -40),
+		DiamondMinN:   r.int("DIAMOND_MIN_N", 5),
 
-		WebResearch:  envStr("WEB_RESEARCH", "1") == "1",
-		ManualMinEUR: envInt("MANUAL_MIN_EUR", 400),
-		MooseMinEUR:  envInt("MOOSE_MIN_EUR", 400),
+		WebResearch:  r.bool("WEB_RESEARCH", true),
+		ManualMinEUR: r.int("MANUAL_MIN_EUR", 400),
+		MooseMinEUR:  r.int("MOOSE_MIN_EUR", 400),
 
-		BannedModels: envList("BANNED_MODELS", "macbook"),
-		RequireDGPU:  envStr("REQUIRE_DGPU", "1") == "1",
-		MarketTolPct: envInt("MARKET_TOL_PCT", 5),
+		BannedModels: r.list("BANNED_MODELS", "macbook"),
+		RequireDGPU:  r.bool("REQUIRE_DGPU", true),
+		MarketTolPct: r.int("MARKET_TOL_PCT", 5),
 	}
+	cfg.parseErrors = append(cfg.parseErrors, r.errors...)
+	return cfg
 }
 
 func (c *Config) Validate() error {
+	if len(c.parseErrors) > 0 {
+		return fmt.Errorf("invalid environment: %s", strings.Join(c.parseErrors, "; "))
+	}
 	checkDuration := func(name string, v time.Duration) error {
 		if v <= 0 {
 			return fmt.Errorf("%s must be positive", name)
@@ -129,11 +146,20 @@ func (c *Config) Validate() error {
 	if c.DiamondMinN <= 0 {
 		return fmt.Errorf("DIAMOND_MIN_N must be positive")
 	}
+	if c.DiamondDevPct >= 0 || c.DiamondDevPct < -100 {
+		return fmt.Errorf("DIAMOND_DEV_PCT must be in -100..-1")
+	}
+	if c.SuspectDevPct < -100 {
+		return fmt.Errorf("SUSPECT_DEV_PCT must be >= -100")
+	}
 	if c.SuspectDevPct >= c.DiamondDevPct {
 		return fmt.Errorf("SUSPECT_DEV_PCT must be lower than DIAMOND_DEV_PCT")
 	}
 	if c.MarketTolPct < 0 || c.MarketTolPct > 100 {
 		return fmt.Errorf("MARKET_TOL_PCT must be in 0..100")
+	}
+	if c.ManualMinEUR < 0 || c.MooseMinEUR < 0 {
+		return fmt.Errorf("MANUAL_MIN_EUR and MOOSE_MIN_EUR must be >= 0")
 	}
 	if _, err := time.Parse("15:04", c.DigestAt); err != nil {
 		return fmt.Errorf("DIGEST_AT must be HH:MM: %w", err)
@@ -144,22 +170,43 @@ func (c *Config) Validate() error {
 	if strings.TrimSpace(c.DBPath) == "" || strings.TrimSpace(c.ResearchDBPath) == "" {
 		return fmt.Errorf("DB_PATH and RESEARCH_DB_PATH must be non-empty")
 	}
-	if strings.TrimSpace(c.LockPath) == "" {
-		return fmt.Errorf("LOCK_PATH must be non-empty")
+	if strings.TrimSpace(c.CSVPath) == "" || strings.TrimSpace(c.HeartbeatPath) == "" || strings.TrimSpace(c.LockPath) == "" {
+		return fmt.Errorf("CSV_PATH, HEARTBEAT_PATH and LOCK_PATH must be non-empty")
+	}
+	for _, item := range []struct {
+		name  string
+		value string
+	}{
+		{"GEMINI_MODEL", c.GeminiModel},
+		{"GEMINI_TEXT_MODEL", c.GeminiTextModel},
+		{"GEMINI_VISION_MODEL", c.GeminiVisionModel},
+		{"GEMINI_SEARCH_MODEL", c.GeminiSearchModel},
+	} {
+		if strings.TrimSpace(item.value) == "" {
+			return fmt.Errorf("%s must be non-empty", item.name)
+		}
 	}
 	return nil
 }
 
-func envStr(key, def string) string {
-	if v := os.Getenv(key); v != "" {
+func (r *envReader) raw(key string) string {
+	if r == nil || r.lookup == nil {
+		return ""
+	}
+	v, _ := r.lookup(key)
+	return strings.TrimSpace(v)
+}
+
+func (r *envReader) str(key, def string) string {
+	if v := r.raw(key); v != "" {
 		return v
 	}
 	return def
 }
 
 // envList — список значений через запятую (пустые элементы отбрасываются).
-func envList(key, def string) []string {
-	v := envStr(key, def)
+func (r *envReader) list(key, def string) []string {
+	v := r.str(key, def)
 	var out []string
 	for _, item := range strings.Split(v, ",") {
 		if item = strings.TrimSpace(item); item != "" {
@@ -169,19 +216,38 @@ func envList(key, def string) []string {
 	return out
 }
 
-func envInt(key string, def int) int {
-	if v := os.Getenv(key); v != "" {
-		if n, err := strconv.Atoi(v); err == nil {
-			return n
+func (r *envReader) int(key string, def int) int {
+	if v := r.raw(key); v != "" {
+		n, err := strconv.Atoi(v)
+		if err != nil {
+			r.errors = append(r.errors, fmt.Sprintf("%s must be integer, got %q", key, v))
+			return def
 		}
+		return n
 	}
 	return def
 }
 
-func envDurationSec(key string, defSec int) time.Duration {
-	return time.Duration(envInt(key, defSec)) * time.Second
+func (r *envReader) bool(key string, def bool) bool {
+	v := strings.ToLower(r.raw(key))
+	if v == "" {
+		return def
+	}
+	switch v {
+	case "1", "true", "yes", "y", "on":
+		return true
+	case "0", "false", "no", "n", "off":
+		return false
+	default:
+		r.errors = append(r.errors, fmt.Sprintf("%s must be boolean (1/0/true/false), got %q", key, v))
+		return def
+	}
 }
 
-func envDurationMin(key string, defMin int) time.Duration {
-	return time.Duration(envInt(key, defMin)) * time.Minute
+func (r *envReader) durationSec(key string, defSec int) time.Duration {
+	return time.Duration(r.int(key, defSec)) * time.Second
+}
+
+func (r *envReader) durationMin(key string, defMin int) time.Duration {
+	return time.Duration(r.int(key, defMin)) * time.Minute
 }
