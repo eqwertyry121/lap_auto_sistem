@@ -226,7 +226,22 @@ func stepUpOutclasses(target pricing.Lot, step *pricing.Lot) bool {
 
 // ---------- полный прогон лота ----------
 
-// Outcome — результат прогона для вызывающего кода.
+// withoutProductionOLS keeps OLS/K3 available for analysis, but removes it from live decisions.
+func withoutProductionOLS(eval pricing.MarketEvaluation) (pricing.MarketEvaluation, bool) {
+	if eval.Estimate.Level != "K3" {
+		return eval, false
+	}
+	eval.Estimate = pricing.PriceEstimate{}
+	eval.ComparableMedian = 0
+	eval.ComparableP25 = 0
+	eval.OpportunityCeiling = 0
+	eval.OpportunityBy = nil
+	eval.Confidence = "NONE"
+	eval.Deviation = 0
+	eval.DevOK = false
+	return eval, true
+}
+
 func diamondSuppressionReason(est pricing.PriceEstimate, gpuScore float64, condition string, sellerFound bool) string {
 	var reasons []string
 	if est.Level == "K3" {
@@ -244,6 +259,7 @@ func diamondSuppressionReason(est pricing.PriceEstimate, gpuScore float64, condi
 	return strings.Join(reasons, "; ")
 }
 
+// Outcome — результат прогона для вызывающего кода.
 type Outcome struct {
 	Code      string
 	Status    models.Status
@@ -551,8 +567,12 @@ func Run(ctx context.Context, f *Funnel, cfg *config.Config, gem *vision.GeminiC
 		RAMGB: recognized.RAMGB, SSDGB: recognized.SSDGB, GPUModel: gpuModel, GPUScore: gpuScore,
 	}
 	eval := market.Evaluate(lot)
+	eval, droppedProductionOLS := withoutProductionOLS(eval)
 	est := eval.Estimate
 	dev, devOK := eval.Deviation, eval.DevOK
+	if droppedProductionOLS {
+		tr.f("L4: K3/OLS price estimate is disabled for production decisions; treating as no comparable KP group")
+	}
 	facts.PriceEUR = priceEUR
 	facts.MedianEUR = eval.ComparableMedian
 	if lateJunk := filters.L2(facts); lateJunk.Class != junk.Class || strings.Join(lateJunk.Reasons, "; ") != strings.Join(junk.Reasons, "; ") {

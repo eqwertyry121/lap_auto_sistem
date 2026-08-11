@@ -188,10 +188,12 @@ func loadLots(ctx context.Context, dbPath string, rsdRate float64) ([]Lot, error
 		return nil, err
 	}
 
+	recentSince := time.Now().Add(-30 * 24 * time.Hour).Unix()
 	rows, err := db.QueryContext(ctx, `
 SELECT a.ad_id, a.title, a.url, a.price, a.currency, a.posted, a.kind,
 	a.description, a.seller, a.is_trader, a.kp_izlog, a.is_renewed,
-	COALESCE(sa.ads_count,0), COALESCE(sel.trader_seen,0), COALESCE(sel.kpizlog_seen,0),
+	COALESCE(sa.ads_count,0), COALESCE(sra.recent_ads_count,0),
+	COALESCE(sel.trader_seen,0), COALESCE(sel.kpizlog_seen,0),
 	COALESCE(sel.reviews,0), COALESCE(sel.user_created,''),
 	COALESCE(sp.cpu_model,''), COALESCE(sp.cpu_score,0), COALESCE(sp.ram_gb,0),
 	COALESCE(sp.ssd_gb,0), COALESCE(sp.gpu_model,''), COALESCE(sp.gpu_score,0)
@@ -204,9 +206,15 @@ LEFT JOIN (
 	WHERE user_id != 0
 	GROUP BY user_id
 ) sa ON sa.user_id = a.user_id
+LEFT JOIN (
+	SELECT user_id, COUNT(*) AS recent_ads_count
+	FROM research_ads
+	WHERE user_id != 0 AND fetched_at >= ?
+	GROUP BY user_id
+) sra ON sra.user_id = a.user_id
 WHERE a.fetch_status='OK'
   AND a.kind='USED'
-  AND a.url != ''`)
+  AND a.url != ''`, recentSince)
 	if err != nil {
 		return nil, err
 	}
@@ -219,13 +227,13 @@ WHERE a.fetch_status='OK'
 			price                                  float64
 			currency, posted, desc, seller, joined string
 			isTrader, kpIzlog, isRenewed           int
-			sellerAds                              int
+			sellerAds, sellerRecentAds             int
 			sellerTraderSeen, sellerKPIzlogSeen    int
 			reviews                                int
 		)
 		if err := rows.Scan(&l.AdID, &l.Title, &l.URL, &price, &currency, &posted, &l.Kind,
 			&desc, &seller, &isTrader, &kpIzlog, &isRenewed,
-			&sellerAds, &sellerTraderSeen, &sellerKPIzlogSeen, &reviews, &joined,
+			&sellerAds, &sellerRecentAds, &sellerTraderSeen, &sellerKPIzlogSeen, &reviews, &joined,
 			&l.CPUModel, &l.CPUScore, &l.RAMGB, &l.SSDGB,
 			&l.GPUModel, &l.GPUScore); err != nil {
 			return nil, err
@@ -241,6 +249,7 @@ WHERE a.fetch_status='OK'
 				KPIzlog:           kpIzlog != 0,
 				IsRenewed:         isRenewed != 0,
 				SellerAds:         sellerAds,
+				SellerRecentAds:   sellerRecentAds,
 				SellerAgeDays:     sellerAgeDays(joined),
 				Reviews:           reviews,
 				SellerTraderSeen:  sellerTraderSeen != 0,

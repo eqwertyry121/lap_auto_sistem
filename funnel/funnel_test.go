@@ -130,6 +130,34 @@ func TestStepUpOutclassesLatitude3510Case(t *testing.T) {
 	}
 }
 
+func TestWithoutProductionOLSKeepsAlternatives(t *testing.T) {
+	dom := pricing.Lot{AdID: 2, URL: "https://example.test/dom", Price: 210, CPUScore: 10000}
+	step := pricing.Lot{AdID: 3, URL: "https://example.test/step", Price: 220, CPUScore: 12000}
+	eval := pricing.MarketEvaluation{
+		Estimate:           pricing.PriceEstimate{Level: "K3", Median: 300, RawMedian: 300, N: 80},
+		ComparableMedian:   300,
+		ComparableP25:      250,
+		OpportunityCeiling: 210,
+		OpportunityBy:      &dom,
+		DominatedBy:        &dom,
+		StepUp:             &step,
+		Confidence:         "LOW",
+		Deviation:          -0.30,
+		DevOK:              true,
+	}
+
+	got, dropped := withoutProductionOLS(eval)
+	if !dropped {
+		t.Fatal("K3 estimate must be disabled for production")
+	}
+	if got.DevOK || got.Estimate.Level != "" || got.ComparableMedian != 0 || got.OpportunityBy != nil {
+		t.Fatalf("K3 market fields were not cleared: %+v", got)
+	}
+	if got.DominatedBy == nil || got.DominatedBy.AdID != dom.AdID || got.StepUp == nil || got.StepUp.AdID != step.AdID {
+		t.Fatalf("alternatives must survive K3 clearing: %+v", got)
+	}
+}
+
 func TestManualAlertWorthy(t *testing.T) {
 	cases := []struct {
 		price  float64
