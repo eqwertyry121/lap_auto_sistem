@@ -92,7 +92,16 @@ func TestL1_SellerHistoryAndName(t *testing.T) {
 	if v := L1(AdFacts{Title: "Laptop i5", Seller: "Laptop Centar NS"}); v.Class != ClassShop {
 		t.Errorf("коммерческое имя продавца должно резать: %s (%v)", v.Class, v.Reasons)
 	}
-	for _, seller := range []string{"Pc Komponente Servis Računara", "Pc&Tehnika", "Western Europe"} {
+	for _, seller := range []string{
+		"Pc Komponente Servis Računara",
+		"Pc&Tehnika",
+		"Western Europe",
+		"Pc Service - Grobyte",
+		"It-Zona",
+		"Techno-Zona Rs/Ru/Eng",
+		"Dejan/Servis-Prodaja/Pc/Laptop",
+		"K@Milan It Servis I Prodaja",
+	} {
 		if v := L1(AdFacts{Title: "Laptop i5", Seller: seller}); v.Class != ClassShop {
 			t.Errorf("коммерческое имя продавца %q должно резать: %s (%v)", seller, v.Class, v.Reasons)
 		}

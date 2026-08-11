@@ -69,6 +69,7 @@ var sellerNameShopMarkers = []string{
 	"shop", "store", "laptop centar", "centar laptopa", "laptop servis",
 	"servis racunara", "racunari", "kompjuteri", "computer", "doo", "d.o.o",
 	"trade", "komerc", "best buy", "tehnika", "komponente", "western europe",
+	"pc service", "it servis", "servis-prodaja", "it-zona", "techno-zona",
 }
 
 const (
