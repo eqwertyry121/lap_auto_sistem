@@ -1,0 +1,146 @@
+[
+  {
+    "name": "latitude_3510_requires_step_up_link",
+    "target": {
+      "ad_id": 194444822,
+      "title": "Dell Latitude 3510 i7 (10510U) Nvidia MX230",
+      "url": "https://www.kupujemprodajem.com/kompjuteri-laptop-i-tablet/laptopovi/dell-latitude-3510-i7-10510u-nvidia-mx230/oglas/194444822",
+      "cpu_model": "Intel Core i7-10510U",
+      "cpu_score": 4100,
+      "gpu_model": "NVIDIA GeForce MX230",
+      "gpu_score": 4125,
+      "ram_gb": 2,
+      "ssd_gb": 256,
+      "price": 200
+    },
+    "market": [
+      {
+        "ad_id": 194444822,
+        "title": "Dell Latitude 3510 i7 (10510U) Nvidia MX230",
+        "url": "https://www.kupujemprodajem.com/kompjuteri-laptop-i-tablet/laptopovi/dell-latitude-3510-i7-10510u-nvidia-mx230/oglas/194444822",
+        "cpu_model": "Intel Core i7-10510U",
+        "cpu_score": 4100,
+        "gpu_model": "NVIDIA GeForce MX230",
+        "gpu_score": 4125,
+        "ram_gb": 2,
+        "ssd_gb": 256,
+        "price": 200
+      },
+      {
+        "ad_id": 194444900,
+        "title": "Lenovo Y520",
+        "url": "https://kp.test/lenovo-y520",
+        "cpu_model": "Intel Core i7-7700HQ",
+        "cpu_score": 10000,
+        "gpu_model": "NVIDIA GeForce GTX 1050 Ti",
+        "gpu_score": 14947,
+        "ram_gb": 16,
+        "ssd_gb": 512,
+        "price": 210
+      }
+    ],
+    "want_step_up_ad_id": 194444900
+  },
+  {
+    "name": "fujitsu_h7510_requires_step_up_link",
+    "target": {
+      "ad_id": 194457645,
+      "title": "Fujitsu H7510 i7-10850H 32GB Quadro T1000",
+      "url": "https://www.kupujemprodajem.com/kompjuteri-laptop-i-tablet/laptopovi/fujitsu-h7510-i7-10850h-32gb-ddr4-512nvme-15-6-nvidia-4gb-4g/oglas/194457645",
+      "cpu_model": "Intel Core i7-10850H",
+      "cpu_score": 7198,
+      "gpu_model": "NVIDIA Quadro T1000",
+      "gpu_score": 15125,
+      "ram_gb": 32,
+      "ssd_gb": 512,
+      "price": 449
+    },
+    "market": [
+      {
+        "ad_id": 194457645,
+        "title": "Fujitsu H7510 i7-10850H 32GB Quadro T1000",
+        "url": "https://www.kupujemprodajem.com/kompjuteri-laptop-i-tablet/laptopovi/fujitsu-h7510-i7-10850h-32gb-ddr4-512nvme-15-6-nvidia-4gb-4g/oglas/194457645",
+        "cpu_model": "Intel Core i7-10850H",
+        "cpu_score": 7198,
+        "gpu_model": "NVIDIA Quadro T1000",
+        "gpu_score": 15125,
+        "ram_gb": 32,
+        "ssd_gb": 512,
+        "price": 449
+      },
+      {
+        "ad_id": 194457700,
+        "title": "Acer Predator Helios i7 RTX",
+        "url": "https://kp.test/acer-predator-helios",
+        "cpu_model": "Intel Core i7",
+        "cpu_score": 20000,
+        "gpu_model": "NVIDIA GeForce RTX",
+        "gpu_score": 26087,
+        "ram_gb": 16,
+        "ssd_gb": 1024,
+        "price": 450
+      }
+    ],
+    "want_step_up_ad_id": 194457700
+  },
+  {
+    "name": "rational_ceiling_uses_private_stronger_lot",
+    "target": {
+      "ad_id": 999,
+      "title": "Target old office laptop",
+      "url": "https://kp.test/target",
+      "cpu_model": "i5-old",
+      "cpu_score": 3000,
+      "gpu_model": "NVIDIA MX",
+      "gpu_score": 3000,
+      "ram_gb": 8,
+      "ssd_gb": 256,
+      "price": 100
+    },
+    "market": [
+      {"ad_id": 1, "title": "Comparable 1", "url": "https://kp.test/1", "cpu_model": "i5-old", "cpu_score": 3000, "gpu_model": "NVIDIA MX", "gpu_score": 3000, "ram_gb": 8, "ssd_gb": 256, "price": 250},
+      {"ad_id": 2, "title": "Comparable 2", "url": "https://kp.test/2", "cpu_model": "i5-old", "cpu_score": 3000, "gpu_model": "NVIDIA MX", "gpu_score": 3000, "ram_gb": 8, "ssd_gb": 256, "price": 250},
+      {"ad_id": 3, "title": "Comparable 3", "url": "https://kp.test/3", "cpu_model": "i5-old", "cpu_score": 3000, "gpu_model": "NVIDIA MX", "gpu_score": 3000, "ram_gb": 8, "ssd_gb": 256, "price": 250},
+      {"ad_id": 4, "title": "Comparable 4", "url": "https://kp.test/4", "cpu_model": "i5-old", "cpu_score": 3000, "gpu_model": "NVIDIA MX", "gpu_score": 3000, "ram_gb": 8, "ssd_gb": 256, "price": 250},
+      {"ad_id": 5, "title": "Comparable 5", "url": "https://kp.test/5", "cpu_model": "i5-old", "cpu_score": 3000, "gpu_model": "NVIDIA MX", "gpu_score": 3000, "ram_gb": 8, "ssd_gb": 256, "price": 250},
+      {"ad_id": 6, "title": "Comparable 6", "url": "https://kp.test/6", "cpu_model": "i5-old", "cpu_score": 3000, "gpu_model": "NVIDIA MX", "gpu_score": 3000, "ram_gb": 8, "ssd_gb": 256, "price": 250},
+      {"ad_id": 7, "title": "Comparable 7", "url": "https://kp.test/7", "cpu_model": "i5-old", "cpu_score": 3000, "gpu_model": "NVIDIA MX", "gpu_score": 3000, "ram_gb": 8, "ssd_gb": 256, "price": 250},
+      {"ad_id": 8, "title": "Comparable 8", "url": "https://kp.test/8", "cpu_model": "i5-old", "cpu_score": 3000, "gpu_model": "NVIDIA MX", "gpu_score": 3000, "ram_gb": 8, "ssd_gb": 256, "price": 250},
+      {"ad_id": 50, "title": "Shop stronger", "url": "https://kp.test/shop", "cpu_model": "i7-new", "cpu_score": 12000, "gpu_model": "NVIDIA RTX", "gpu_score": 8000, "ram_gb": 8, "ssd_gb": 256, "price": 90, "is_shop": true},
+      {"ad_id": 51, "title": "Private stronger", "url": "https://kp.test/private-stronger", "cpu_model": "i7-new", "cpu_score": 12000, "gpu_model": "NVIDIA RTX", "gpu_score": 8000, "ram_gb": 8, "ssd_gb": 256, "price": 110}
+    ],
+    "want_dominated_by_ad_id": 51,
+    "want_opportunity_ceiling": 110,
+    "want_comparable_median": 250
+  },
+  {
+    "name": "step_up_without_url_is_ignored",
+    "target": {
+      "ad_id": 194438629,
+      "title": "Acer Aspire target",
+      "url": "https://kp.test/acer-target",
+      "cpu_model": "cpu",
+      "cpu_score": 6871,
+      "gpu_model": "gpu",
+      "gpu_score": 47062,
+      "ram_gb": 16,
+      "ssd_gb": 512,
+      "price": 200
+    },
+    "market": [
+      {
+        "ad_id": 194288556,
+        "title": "Acer stronger without URL",
+        "url": "",
+        "cpu_model": "cpu",
+        "cpu_score": 6871,
+        "gpu_model": "gpu",
+        "gpu_score": 48062,
+        "ram_gb": 16,
+        "ssd_gb": 512,
+        "price": 210
+      }
+    ],
+    "want_no_step_up": true
+  }
+]
