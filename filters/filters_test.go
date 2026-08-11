@@ -230,6 +230,28 @@ func TestL2_PriceCrossCheck(t *testing.T) {
 	}
 }
 
+func TestL2ReasonsAreReadableUTF8(t *testing.T) {
+	cases := []Verdict{
+		L2(AdFacts{Title: "Laptop", Description: "baterija ne drzi"}),
+		L2(AdFacts{Title: "Laptop za delove", PriceEUR: 280, MedianEUR: 300}),
+		L2(AdFacts{Title: "Laptop za delove", PriceEUR: 50, MedianEUR: 300}),
+		L2(AdFacts{Title: "Laptop ne radi"}),
+		L2(AdFacts{Title: "Laptop ne radi", PriceEUR: 280, MedianEUR: 300}),
+	}
+	bad := []string{"Рґ", "Рј", "С€", "С†", "в‚", "вЂ", "В«", "В»", "в‰"}
+	for _, v := range cases {
+		joined := strings.Join(v.Reasons, "; ")
+		if joined == "" {
+			t.Fatalf("expected diagnostic reason for %s", v.Class)
+		}
+		for _, marker := range bad {
+			if strings.Contains(joined, marker) {
+				t.Fatalf("reason contains mojibake marker %q: %q", marker, joined)
+			}
+		}
+	}
+}
+
 func TestL2_BezPunjacaContext(t *testing.T) {
 	// Регрессия кейса VX15 (2026-08-06): «prodaje se sa punjacem … ukoliko
 	// zelite bez punjaca cena je 200e» — зарядка В КОМПЛЕКТЕ, «без зарядки» —

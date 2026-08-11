@@ -206,7 +206,7 @@ func L2(f AdFacts) Verdict {
 
 	if m := firstMarker(textNorm, defectMarkers); m != "" {
 		if !(m == "bez punjaca" && chargerIsIncluded(textNorm)) {
-			return Verdict{JunkDefect, []string{"РґРµС„РµРєС‚: В«" + m + "В»"}}
+			return Verdict{JunkDefect, []string{"дефект: «" + m + "»"}}
 		}
 	}
 
@@ -233,14 +233,14 @@ func L2(f AdFacts) Verdict {
 
 	if m := firstMarker(textNorm, uncertainBrokenMarkers); m != "" {
 		if f.MedianEUR <= 0 {
-			return Verdict{JunkUncertain, []string{"С€РёСЂРѕРєРёР№ РјР°СЂРєРµСЂ В«" + m + "В» Р±РµР· С†РµРЅРѕРІРѕРіРѕ РєСЂРѕСЃСЃ-С‡РµРєР°"}}
+			return Verdict{JunkUncertain, []string{"широкий маркер «" + m + "» без ценового кросс-чека"}}
 		}
 		if f.PriceEUR >= 0.6*f.MedianEUR {
 			return Verdict{JunkUncertain,
-				[]string{fmt.Sprintf("РјР°СЂРєРµСЂ В«%sВ», РЅРѕ С†РµРЅР° %.0fв‚¬ в‰Ґ 60%% РјРµРґРёР°РЅС‹ %.0fв‚¬ вЂ” РїСЂРѕРІРµСЂРёС‚СЊ РІСЂСѓС‡РЅСѓСЋ",
+				[]string{fmt.Sprintf("маркер «%s», но цена %.0f€ ≥ 60%% медианы %.0f€ — проверить вручную",
 					m, f.PriceEUR, f.MedianEUR)}}
 		}
-		return Verdict{JunkPartsOnly, []string{"РјР°СЂРєРµСЂ В«" + m + "В»"}}
+		return Verdict{JunkPartsOnly, []string{"маркер «" + m + "»"}}
 	}
 
 	return Verdict{JunkClean, nil}
