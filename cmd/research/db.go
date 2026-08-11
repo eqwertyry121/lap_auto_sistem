@@ -34,13 +34,15 @@ CREATE INDEX IF NOT EXISTS idx_ra_status ON research_ads(fetch_status);
 
 CREATE TABLE IF NOT EXISTS research_specs (
 	ad_id      INTEGER PRIMARY KEY,
+	laptop_model TEXT NOT NULL DEFAULT '',
 	cpu_model  TEXT NOT NULL DEFAULT '',
 	cpu_score  REAL NOT NULL DEFAULT 0,
 	ram_gb     INTEGER NOT NULL DEFAULT 0,
 	ssd_gb     INTEGER NOT NULL DEFAULT 0,
 	gpu_model  TEXT NOT NULL DEFAULT '',
 	gpu_score  REAL NOT NULL DEFAULT 0,
-	updated_at INTEGER NOT NULL DEFAULT 0
+	updated_at INTEGER NOT NULL DEFAULT 0,
+	source     TEXT NOT NULL DEFAULT 'regex'
 );
 
 CREATE TABLE IF NOT EXISTS sellers (
@@ -187,6 +189,11 @@ func migrateResearch(db *sql.DB) error {
 	rows2.Close()
 	if err := rows2.Err(); err != nil {
 		return err
+	}
+	if !specCols["laptop_model"] {
+		if _, err := db.Exec(`ALTER TABLE research_specs ADD COLUMN laptop_model TEXT NOT NULL DEFAULT ''`); err != nil {
+			return err
+		}
 	}
 	if !specCols["source"] {
 		if _, err := db.Exec(`ALTER TABLE research_specs ADD COLUMN source TEXT NOT NULL DEFAULT 'regex'`); err != nil {
@@ -366,23 +373,25 @@ func boolInt(b bool) int {
 }
 
 type specsRow struct {
-	AdID     int64
-	CPUModel string
-	CPUScore float64
-	RAMGB    int
-	SSDGB    int
-	GPUModel string
-	GPUScore float64
+	AdID        int64
+	LaptopModel string
+	CPUModel    string
+	CPUScore    float64
+	RAMGB       int
+	SSDGB       int
+	GPUModel    string
+	GPUScore    float64
 }
 
 func (s *researchStore) upsertSpecs(ctx context.Context, r specsRow) error {
 	_, err := s.db.ExecContext(ctx, `
-INSERT INTO research_specs (ad_id, cpu_model, cpu_score, ram_gb, ssd_gb, gpu_model, gpu_score, updated_at)
-VALUES (?,?,?,?,?,?,?,?)
+INSERT INTO research_specs (ad_id, laptop_model, cpu_model, cpu_score, ram_gb, ssd_gb, gpu_model, gpu_score, updated_at)
+VALUES (?,?,?,?,?,?,?,?,?)
 ON CONFLICT(ad_id) DO UPDATE SET
+	laptop_model=excluded.laptop_model,
 	cpu_model=excluded.cpu_model, cpu_score=excluded.cpu_score, ram_gb=excluded.ram_gb,
 	ssd_gb=excluded.ssd_gb, gpu_model=excluded.gpu_model, gpu_score=excluded.gpu_score,
 	updated_at=excluded.updated_at`,
-		r.AdID, r.CPUModel, r.CPUScore, r.RAMGB, r.SSDGB, r.GPUModel, r.GPUScore, time.Now().Unix())
+		r.AdID, r.LaptopModel, r.CPUModel, r.CPUScore, r.RAMGB, r.SSDGB, r.GPUModel, r.GPUScore, time.Now().Unix())
 	return err
 }

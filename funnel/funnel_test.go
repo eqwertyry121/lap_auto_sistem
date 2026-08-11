@@ -236,9 +236,12 @@ func TestCachedGeminiSpecsMergePartialStages(t *testing.T) {
 	ctx := context.Background()
 
 	if err := saveCachedGeminiSpecs(ctx, dbPath, 101, "gemini-text", specs.GeminiSpecs{
-		CPU: "i7-10850H", RAMGB: 32, SSDGB: 512,
+		LaptopModel: "Fujitsu Celsius H7510", CPU: "i7-10850H", RAMGB: 32, SSDGB: 512,
 	}, nil, nil); err != nil {
 		t.Fatal(err)
+	}
+	if !researchSpecsColumnExists(t, dbPath, "laptop_model") {
+		t.Fatal("saveCachedGeminiSpecs must upgrade old research_specs schema with laptop_model")
 	}
 	if err := saveCachedGeminiSpecs(ctx, dbPath, 101, "gemini-photo-all", specs.GeminiSpecs{
 		GPU: "NVIDIA Quadro T1000",
@@ -250,7 +253,7 @@ func TestCachedGeminiSpecsMergePartialStages(t *testing.T) {
 	if !ok {
 		t.Fatal("cached Gemini specs not found")
 	}
-	if got.CPU != "i7-10850H" || got.RAMGB != 32 || got.SSDGB != 512 || got.GPU != "NVIDIA Quadro T1000" {
+	if got.LaptopModel != "Fujitsu Celsius H7510" || got.CPU != "i7-10850H" || got.RAMGB != 32 || got.SSDGB != 512 || got.GPU != "NVIDIA Quadro T1000" {
 		t.Fatalf("merged specs = %+v", got)
 	}
 	if !hasSpecSource(source, "gemini-text") || !hasSpecSource(source, "gemini-photo-all") {
@@ -273,7 +276,7 @@ func TestCachedModelCatalogSpecsAreTrusted(t *testing.T) {
 	ctx := context.Background()
 
 	if err := saveCachedGeminiSpecs(ctx, dbPath, 202, "model-catalog", specs.GeminiSpecs{
-		CPU: "Ryzen 7 7735HS", RAMGB: 16, SSDGB: 512, GPU: "integrated",
+		LaptopModel: "Lenovo ThinkPad E14 Gen 6 21M3003PCX", CPU: "Ryzen 7 7735HS", RAMGB: 16, SSDGB: 512, GPU: "integrated",
 	}, nil, nil); err != nil {
 		t.Fatal(err)
 	}
@@ -282,7 +285,7 @@ func TestCachedModelCatalogSpecsAreTrusted(t *testing.T) {
 	if !ok {
 		t.Fatal("model-catalog specs must be loaded as trusted cache")
 	}
-	if got.CPU != "Ryzen 7 7735HS" || got.RAMGB != 16 || got.SSDGB != 512 || !got.GPUIntegrated() {
+	if got.LaptopModel != "Lenovo ThinkPad E14 Gen 6 21M3003PCX" || got.CPU != "Ryzen 7 7735HS" || got.RAMGB != 16 || got.SSDGB != 512 || !got.GPUIntegrated() {
 		t.Fatalf("cached catalog specs = %+v", got)
 	}
 	if source != "model-catalog" {
@@ -313,6 +316,40 @@ CREATE TABLE research_specs (
 		t.Fatal(err)
 	}
 	return dbPath
+}
+
+func researchSpecsColumnExists(t *testing.T, dbPath, column string) bool {
+	t.Helper()
+	db, err := sql.Open("sqlite", dbPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	rows, err := db.Query(`PRAGMA table_info(research_specs)`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var (
+			cid     int
+			name    string
+			typ     string
+			notNull int
+			def     sql.NullString
+			pk      int
+		)
+		if err := rows.Scan(&cid, &name, &typ, &notNull, &def, &pk); err != nil {
+			t.Fatal(err)
+		}
+		if name == column {
+			return true
+		}
+	}
+	if err := rows.Err(); err != nil {
+		t.Fatal(err)
+	}
+	return false
 }
 
 func TestManualAlertWorthy(t *testing.T) {

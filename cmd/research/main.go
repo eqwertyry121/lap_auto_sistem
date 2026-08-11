@@ -639,16 +639,17 @@ func enrich(ctx context.Context, store *researchStore, hwPath string) error {
 	}
 	defer tx.Rollback()
 	stmt, err := tx.PrepareContext(ctx, `
-INSERT INTO research_specs (ad_id, cpu_model, cpu_score, ram_gb, ssd_gb, gpu_model, gpu_score, updated_at, source)
-VALUES (?,?,?,?,?,?,?,?, 'regex')
+INSERT INTO research_specs (ad_id, laptop_model, cpu_model, cpu_score, ram_gb, ssd_gb, gpu_model, gpu_score, updated_at, source)
+VALUES (?,?,?,?,?,?,?,?,?, 'regex')
 ON CONFLICT(ad_id) DO UPDATE SET
-	cpu_model=CASE WHEN research_specs.source LIKE 'gemini%' THEN research_specs.cpu_model ELSE excluded.cpu_model END,
-	cpu_score=CASE WHEN research_specs.source LIKE 'gemini%' THEN research_specs.cpu_score ELSE excluded.cpu_score END,
-	ram_gb=CASE WHEN research_specs.source LIKE 'gemini%' THEN research_specs.ram_gb ELSE excluded.ram_gb END,
-	ssd_gb=CASE WHEN research_specs.source LIKE 'gemini%' THEN research_specs.ssd_gb ELSE excluded.ssd_gb END,
-	gpu_model=CASE WHEN research_specs.source LIKE 'gemini%' THEN research_specs.gpu_model ELSE excluded.gpu_model END,
-	gpu_score=CASE WHEN research_specs.source LIKE 'gemini%' THEN research_specs.gpu_score ELSE excluded.gpu_score END,
-	source=CASE WHEN research_specs.source LIKE 'gemini%' THEN research_specs.source ELSE excluded.source END,
+	laptop_model=CASE WHEN research_specs.source LIKE '%gemini%' OR research_specs.source LIKE '%model-catalog%' THEN research_specs.laptop_model WHEN excluded.laptop_model != '' THEN excluded.laptop_model ELSE research_specs.laptop_model END,
+	cpu_model=CASE WHEN research_specs.source LIKE '%gemini%' OR research_specs.source LIKE '%model-catalog%' THEN research_specs.cpu_model ELSE excluded.cpu_model END,
+	cpu_score=CASE WHEN research_specs.source LIKE '%gemini%' OR research_specs.source LIKE '%model-catalog%' THEN research_specs.cpu_score ELSE excluded.cpu_score END,
+	ram_gb=CASE WHEN research_specs.source LIKE '%gemini%' OR research_specs.source LIKE '%model-catalog%' THEN research_specs.ram_gb ELSE excluded.ram_gb END,
+	ssd_gb=CASE WHEN research_specs.source LIKE '%gemini%' OR research_specs.source LIKE '%model-catalog%' THEN research_specs.ssd_gb ELSE excluded.ssd_gb END,
+	gpu_model=CASE WHEN research_specs.source LIKE '%gemini%' OR research_specs.source LIKE '%model-catalog%' THEN research_specs.gpu_model ELSE excluded.gpu_model END,
+	gpu_score=CASE WHEN research_specs.source LIKE '%gemini%' OR research_specs.source LIKE '%model-catalog%' THEN research_specs.gpu_score ELSE excluded.gpu_score END,
+	source=CASE WHEN research_specs.source LIKE '%gemini%' OR research_specs.source LIKE '%model-catalog%' THEN research_specs.source ELSE excluded.source END,
 	updated_at=excluded.updated_at`)
 	if err != nil {
 		return err
@@ -659,7 +660,7 @@ ON CONFLICT(ad_id) DO UPDATE SET
 	var total, cpuMatched, gpuMatched int
 	for _, r := range src {
 		sp := specs.Extract(r.title + " " + r.desc)
-		row := specsRow{AdID: r.adID, RAMGB: sp.RAMGB, SSDGB: sp.SSDGB}
+		row := specsRow{AdID: r.adID, LaptopModel: specs.ExtractLaptopModel(r.title + " " + r.desc), RAMGB: sp.RAMGB, SSDGB: sp.SSDGB}
 
 		if sp.CPU != "" {
 			if c, ok := cpus[hw.Key(sp.CPU)]; ok {
@@ -678,7 +679,7 @@ ON CONFLICT(ad_id) DO UPDATE SET
 			}
 		}
 
-		if _, err := stmt.ExecContext(ctx, row.AdID, row.CPUModel, row.CPUScore,
+		if _, err := stmt.ExecContext(ctx, row.AdID, row.LaptopModel, row.CPUModel, row.CPUScore,
 			row.RAMGB, row.SSDGB, row.GPUModel, row.GPUScore, now); err != nil {
 			return err
 		}

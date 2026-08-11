@@ -136,7 +136,8 @@ FROM research_ads a
 LEFT JOIN research_specs s ON s.ad_id = a.ad_id
 WHERE a.fetch_status='OK' AND a.description != ''
 	AND COALESCE(s.cpu_score,0) = 0
-	AND COALESCE(s.source,'') NOT LIKE 'gemini%'
+	AND COALESCE(s.source,'') NOT LIKE '%gemini%'
+	AND COALESCE(s.source,'') NOT LIKE '%model-catalog%'
 ORDER BY CASE upper(a.currency)
 	WHEN 'EUR' THEN a.price
 	WHEN 'RSD' THEN a.price/?
@@ -193,6 +194,9 @@ func parseSpecsJSON(raw string) (geminiSpecs, error) {
 // результат тоже пишется — повторный вызов по лоту запрещён.
 func writeBack(ctx context.Context, db *sql.DB, adID int64, sp geminiSpecs,
 	cpus map[string]hw.CPU, gpus map[string]hw.GPU) error {
+	if err := ensureResearchSpecsLaptopModelColumn(ctx, db); err != nil {
+		return err
+	}
 	cpuModel, cpuScore := strings.TrimSpace(sp.CPU), 0.0
 	if cpuModel != "" {
 		if c, ok := cpus[hw.Key(cpuModel)]; ok {
@@ -206,9 +210,10 @@ func writeBack(ctx context.Context, db *sql.DB, adID int64, sp geminiSpecs,
 		}
 	}
 	_, err := db.ExecContext(ctx, `
-INSERT INTO research_specs (ad_id, cpu_model, cpu_score, ram_gb, ssd_gb, gpu_model, gpu_score, updated_at, source)
-VALUES (?,?,?,?,?,?,?,?, 'gemini-text')
+INSERT INTO research_specs (ad_id, laptop_model, cpu_model, cpu_score, ram_gb, ssd_gb, gpu_model, gpu_score, updated_at, source)
+VALUES (?,?,?,?,?,?,?,?,?, 'gemini-text')
 ON CONFLICT(ad_id) DO UPDATE SET
+	laptop_model=CASE WHEN excluded.laptop_model != '' THEN excluded.laptop_model ELSE research_specs.laptop_model END,
 	cpu_model=CASE WHEN excluded.cpu_model != '' THEN excluded.cpu_model ELSE research_specs.cpu_model END,
 	cpu_score=CASE WHEN excluded.cpu_model != '' THEN excluded.cpu_score ELSE research_specs.cpu_score END,
 	ram_gb=CASE WHEN excluded.ram_gb > 0 THEN excluded.ram_gb ELSE research_specs.ram_gb END,
@@ -216,8 +221,51 @@ ON CONFLICT(ad_id) DO UPDATE SET
 	gpu_model=CASE WHEN excluded.gpu_model != '' THEN excluded.gpu_model ELSE research_specs.gpu_model END,
 	gpu_score=CASE WHEN excluded.gpu_model != '' THEN excluded.gpu_score ELSE research_specs.gpu_score END,
 	updated_at=excluded.updated_at, source=excluded.source`,
-		adID, cpuModel, cpuScore, sp.RAMGB, sp.SSDGB, gpuModel, gpuScore, time.Now().Unix())
+		adID, strings.TrimSpace(sp.LaptopModel), cpuModel, cpuScore, sp.RAMGB, sp.SSDGB, gpuModel, gpuScore, time.Now().Unix())
 	return err
+}
+
+func ensureResearchSpecsLaptopModelColumn(ctx context.Context, db *sql.DB) error {
+	rows, err := db.QueryContext(ctx, `PRAGMA table_info(research_specs)`)
+	if err != nil {
+		return err
+	}
+	defer rows.Close()
+
+	seenTable := false
+	for rows.Next() {
+		seenTable = true
+		var (
+			cid     int
+			name    string
+			typ     string
+			notNull int
+			def     sql.NullString
+			pk      int
+		)
+		if err := rows.Scan(&cid, &name, &typ, &notNull, &def, &pk); err != nil {
+			return err
+		}
+		if strings.EqualFold(name, "laptop_model") {
+			return nil
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return err
+	}
+	if err := rows.Close(); err != nil {
+		return err
+	}
+	if !seenTable {
+		return fmt.Errorf("research_specs table is missing")
+	}
+	if _, err := db.ExecContext(ctx, `ALTER TABLE research_specs ADD COLUMN laptop_model TEXT NOT NULL DEFAULT ''`); err != nil {
+		if strings.Contains(strings.ToLower(err.Error()), "duplicate column") {
+			return nil
+		}
+		return err
+	}
+	return nil
 }
 
 func stripHTML(s string) string {

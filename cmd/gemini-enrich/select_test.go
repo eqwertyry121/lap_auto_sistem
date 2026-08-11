@@ -48,6 +48,7 @@ CREATE TABLE research_specs (
 		{5, 5, "EUR"},      // €5 — ниже порога 10, отфильтрован
 		{6, 999999, "RSD"}, // распознан CPU — исключён
 		{7, 999998, "RSD"}, // уже обработан Gemini — исключён
+		{8, 999997, "RSD"},
 	}
 	for _, r := range rows {
 		if _, err := db.Exec(
@@ -60,6 +61,9 @@ CREATE TABLE research_specs (
 		t.Fatal(err)
 	}
 	if _, err := db.Exec(`INSERT INTO research_specs (ad_id, cpu_score, source) VALUES (7, 0, 'gemini-text')`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec(`INSERT INTO research_specs (ad_id, cpu_score, source) VALUES (8, 0, 'model-catalog')`); err != nil {
 		t.Fatal(err)
 	}
 
@@ -101,17 +105,17 @@ VALUES (10, 'i7-10850H', 7198, 32, 512, 'regex')`); err != nil {
 		t.Fatal(err)
 	}
 
-	if err := writeBack(context.Background(), db, 10, geminiSpecs{GPU: "NVIDIA Quadro T1000"}, nil, nil); err != nil {
+	if err := writeBack(context.Background(), db, 10, geminiSpecs{LaptopModel: "Fujitsu Celsius H7510", GPU: "NVIDIA Quadro T1000"}, nil, nil); err != nil {
 		t.Fatal(err)
 	}
-	var cpu, gpu, source string
+	var laptopModel, cpu, gpu, source string
 	var ram, ssd int
 	if err := db.QueryRow(`
-SELECT cpu_model, ram_gb, ssd_gb, gpu_model, source FROM research_specs WHERE ad_id=10`).
-		Scan(&cpu, &ram, &ssd, &gpu, &source); err != nil {
+SELECT laptop_model, cpu_model, ram_gb, ssd_gb, gpu_model, source FROM research_specs WHERE ad_id=10`).
+		Scan(&laptopModel, &cpu, &ram, &ssd, &gpu, &source); err != nil {
 		t.Fatal(err)
 	}
-	if cpu != "i7-10850H" || ram != 32 || ssd != 512 || gpu != "NVIDIA Quadro T1000" || source != "gemini-text" {
-		t.Fatalf("merged row = cpu=%q ram=%d ssd=%d gpu=%q source=%q", cpu, ram, ssd, gpu, source)
+	if laptopModel != "Fujitsu Celsius H7510" || cpu != "i7-10850H" || ram != 32 || ssd != 512 || gpu != "NVIDIA Quadro T1000" || source != "gemini-text" {
+		t.Fatalf("merged row = model=%q cpu=%q ram=%d ssd=%d gpu=%q source=%q", laptopModel, cpu, ram, ssd, gpu, source)
 	}
 }

@@ -233,6 +233,88 @@ VALUES (?, 'i5-1135G7', 10000, 16, 512)`, adID); err != nil {
 	}
 }
 
+func TestLoadMarketLoadsLaptopModel(t *testing.T) {
+	dbPath := filepath.Join(t.TempDir(), "research.db")
+	db, err := sql.Open("sqlite", dbPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	schema := `
+CREATE TABLE research_ads (
+	ad_id INTEGER PRIMARY KEY,
+	title TEXT NOT NULL DEFAULT '',
+	url TEXT NOT NULL DEFAULT '',
+	price REAL NOT NULL DEFAULT 0,
+	currency TEXT NOT NULL DEFAULT 'EUR',
+	posted TEXT NOT NULL DEFAULT '',
+	kind TEXT NOT NULL DEFAULT 'UNKNOWN',
+	description TEXT NOT NULL DEFAULT '',
+	seller TEXT NOT NULL DEFAULT '',
+	is_trader INTEGER NOT NULL DEFAULT 0,
+	kp_izlog INTEGER NOT NULL DEFAULT 0,
+	is_renewed INTEGER NOT NULL DEFAULT 0,
+	user_id INTEGER NOT NULL DEFAULT 0,
+	fetched_at INTEGER NOT NULL DEFAULT 0,
+	fetch_status TEXT NOT NULL DEFAULT ''
+);
+CREATE TABLE research_specs (
+	ad_id INTEGER PRIMARY KEY,
+	laptop_model TEXT NOT NULL DEFAULT '',
+	cpu_model TEXT NOT NULL DEFAULT '',
+	cpu_score REAL NOT NULL DEFAULT 0,
+	ram_gb INTEGER NOT NULL DEFAULT 0,
+	ssd_gb INTEGER NOT NULL DEFAULT 0,
+	gpu_model TEXT NOT NULL DEFAULT '',
+	gpu_score REAL NOT NULL DEFAULT 0
+);
+CREATE TABLE sellers (
+	user_id INTEGER PRIMARY KEY,
+	trader_seen INTEGER NOT NULL DEFAULT 0,
+	kpizlog_seen INTEGER NOT NULL DEFAULT 0,
+	reviews INTEGER NOT NULL DEFAULT 0,
+	user_created TEXT NOT NULL DEFAULT ''
+);`
+	if _, err := db.Exec(schema); err != nil {
+		t.Fatal(err)
+	}
+	now := time.Now()
+	posted := now.Format("2006-01-02 15:04:05")
+	if _, err := db.Exec(`
+INSERT INTO research_ads (
+	ad_id, title, url, price, currency, posted, kind, description, seller,
+	is_trader, kp_izlog, is_renewed, user_id, fetched_at, fetch_status
+) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+		1, "Lenovo ThinkPad E14 Gen 6", "https://kp.test/1",
+		682, "EUR", posted, "USED", "Clean laptop.", "Marko",
+		0, 0, 0, 0, now.Unix(), "OK"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec(`
+INSERT INTO research_specs (ad_id, laptop_model, cpu_model, cpu_score, ram_gb, ssd_gb, gpu_model, gpu_score)
+VALUES (1, 'Lenovo ThinkPad E14 Gen 6 21M3003PCX', 'Ryzen 7 7735HS', 24200, 16, 512, 'integrated', 0)`); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	m, err := LoadMarket(context.Background(), dbPath, Options{
+		MedianWindowDays:  60,
+		HedonicWindowDays: 90,
+		RSDEurRate:        117.2,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	pool := m.Pool()
+	if len(pool) != 1 {
+		t.Fatalf("pool = %+v, want one loaded lot", pool)
+	}
+	if pool[0].LaptopModel != "Lenovo ThinkPad E14 Gen 6 21M3003PCX" {
+		t.Fatalf("LaptopModel = %q", pool[0].LaptopModel)
+	}
+}
+
 func TestLoadMarketAppliesManualLabels(t *testing.T) {
 	dbPath := filepath.Join(t.TempDir(), "research.db")
 	db, err := sql.Open("sqlite", dbPath)

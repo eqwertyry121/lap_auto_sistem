@@ -27,20 +27,21 @@ import (
 
 // Lot — лот рынка с ценой в EUR и распознанным железом.
 type Lot struct {
-	AdID       int64
-	Title      string
-	URL        string
-	Price      float64 // нормализовано в EUR
-	Posted     time.Time
-	Kind       string // NEW / USED / BROKEN / UNKNOWN
-	IsShop     bool   // is_trader или kp_izlog
-	L2Reviewed bool   // L2 ran with full description and manual labels
-	CPUModel   string
-	CPUScore   float64
-	RAMGB      int
-	SSDGB      int
-	GPUModel   string
-	GPUScore   float64
+	AdID        int64
+	Title       string
+	URL         string
+	Price       float64 // нормализовано в EUR
+	Posted      time.Time
+	Kind        string // NEW / USED / BROKEN / UNKNOWN
+	IsShop      bool   // is_trader или kp_izlog
+	L2Reviewed  bool   // L2 ran with full description and manual labels
+	LaptopModel string
+	CPUModel    string
+	CPUScore    float64
+	RAMGB       int
+	SSDGB       int
+	GPUModel    string
+	GPUScore    float64
 }
 
 // Options — параметры построения рыночной модели.
@@ -195,6 +196,10 @@ func loadLots(ctx context.Context, dbPath string, rsdRate float64) ([]Lot, error
 	adLabelExpr := "''"
 	hasLabels := sqliteTableExists(ctx, db, "labels")
 	hasSellerLabel := sqliteColumnExists(ctx, db, "sellers", "label")
+	laptopModelExpr := "''"
+	if sqliteColumnExists(ctx, db, "research_specs", "laptop_model") {
+		laptopModelExpr = "COALESCE(sp.laptop_model,'')"
+	}
 	if hasLabels {
 		labelJoins = `
 LEFT JOIN labels slbl ON slbl.target_type='seller' AND slbl.target_id = a.user_id
@@ -218,6 +223,7 @@ SELECT a.ad_id, a.title, a.url, a.price, a.currency, a.posted, a.kind,
 	COALESCE(sel.trader_seen,0), COALESCE(sel.kpizlog_seen,0),
 	COALESCE(sel.reviews,0), COALESCE(sel.user_created,''),
 	%s, %s,
+	%s,
 	COALESCE(sp.cpu_model,''), COALESCE(sp.cpu_score,0), COALESCE(sp.ram_gb,0),
 	COALESCE(sp.ssd_gb,0), COALESCE(sp.gpu_model,''), COALESCE(sp.gpu_score,0)
 FROM research_ads a
@@ -238,7 +244,7 @@ LEFT JOIN (
 ) sra ON sra.user_id = a.user_id
 WHERE a.fetch_status='OK'
   AND a.kind='USED'
-  AND a.url != ''`, sellerLabelExpr, adLabelExpr, labelJoins), recentSince)
+  AND a.url != ''`, sellerLabelExpr, adLabelExpr, laptopModelExpr, labelJoins), recentSince)
 	if err != nil {
 		return nil, err
 	}
@@ -260,7 +266,7 @@ WHERE a.fetch_status='OK'
 			&desc, &seller, &isTrader, &kpIzlog, &isRenewed,
 			&sellerAds, &sellerRecentAds, &sellerTraderSeen, &sellerKPIzlogSeen, &reviews, &joined,
 			&sellerLabel, &adLabel,
-			&l.CPUModel, &l.CPUScore, &l.RAMGB, &l.SSDGB,
+			&l.LaptopModel, &l.CPUModel, &l.CPUScore, &l.RAMGB, &l.SSDGB,
 			&l.GPUModel, &l.GPUScore); err != nil {
 			return nil, err
 		}

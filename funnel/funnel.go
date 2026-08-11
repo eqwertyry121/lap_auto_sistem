@@ -577,7 +577,7 @@ func Run(ctx context.Context, f *Funnel, cfg *config.Config, gem *vision.GeminiC
 	}
 	lot := pricing.Lot{
 		AdID: ad.AdID, Title: ad.Name, URL: ad.URL(), Price: priceEUR,
-		Kind: "USED", CPUModel: cpuModel, CPUScore: cpuScore,
+		Kind: "USED", LaptopModel: laptopModel, CPUModel: cpuModel, CPUScore: cpuScore,
 		RAMGB: recognized.RAMGB, SSDGB: recognized.SSDGB, GPUModel: gpuModel, GPUScore: gpuScore,
 	}
 	eval := market.Evaluate(lot)
@@ -847,13 +847,16 @@ func loadCachedGeminiSpecs(ctx context.Context, dbPath string, adID int64) (spec
 	defer db.Close()
 	db.SetMaxOpenConns(1)
 	_, _ = db.ExecContext(ctx, `PRAGMA busy_timeout=5000`)
+	if err := ensureResearchSpecsLaptopModelColumn(ctx, db); err != nil {
+		return specs.GeminiSpecs{}, "", false
+	}
 	var gs specs.GeminiSpecs
 	var source string
 	err = db.QueryRowContext(ctx, `
-SELECT COALESCE(cpu_model,''), COALESCE(ram_gb,0), COALESCE(ssd_gb,0), COALESCE(gpu_model,''), COALESCE(source,'')
+SELECT COALESCE(laptop_model,''), COALESCE(cpu_model,''), COALESCE(ram_gb,0), COALESCE(ssd_gb,0), COALESCE(gpu_model,''), COALESCE(source,'')
 FROM research_specs
 WHERE ad_id=? AND (source LIKE '%gemini%' OR source LIKE '%model-catalog%')
-LIMIT 1`, adID).Scan(&gs.CPU, &gs.RAMGB, &gs.SSDGB, &gs.GPU, &source)
+LIMIT 1`, adID).Scan(&gs.LaptopModel, &gs.CPU, &gs.RAMGB, &gs.SSDGB, &gs.GPU, &source)
 	if err != nil {
 		return specs.GeminiSpecs{}, "", false
 	}
@@ -861,13 +864,16 @@ LIMIT 1`, adID).Scan(&gs.CPU, &gs.RAMGB, &gs.SSDGB, &gs.GPU, &source)
 }
 
 func loadAnyCachedSpecs(ctx context.Context, db *sql.DB, adID int64) (specs.GeminiSpecs, string, bool, error) {
+	if err := ensureResearchSpecsLaptopModelColumn(ctx, db); err != nil {
+		return specs.GeminiSpecs{}, "", false, err
+	}
 	var gs specs.GeminiSpecs
 	var source string
 	err := db.QueryRowContext(ctx, `
-SELECT COALESCE(cpu_model,''), COALESCE(ram_gb,0), COALESCE(ssd_gb,0), COALESCE(gpu_model,''), COALESCE(source,'')
+SELECT COALESCE(laptop_model,''), COALESCE(cpu_model,''), COALESCE(ram_gb,0), COALESCE(ssd_gb,0), COALESCE(gpu_model,''), COALESCE(source,'')
 FROM research_specs
 WHERE ad_id=?
-LIMIT 1`, adID).Scan(&gs.CPU, &gs.RAMGB, &gs.SSDGB, &gs.GPU, &source)
+LIMIT 1`, adID).Scan(&gs.LaptopModel, &gs.CPU, &gs.RAMGB, &gs.SSDGB, &gs.GPU, &source)
 	switch err {
 	case nil:
 		return gs, source, true, nil
@@ -878,8 +884,55 @@ LIMIT 1`, adID).Scan(&gs.CPU, &gs.RAMGB, &gs.SSDGB, &gs.GPU, &source)
 	}
 }
 
+func ensureResearchSpecsLaptopModelColumn(ctx context.Context, db *sql.DB) error {
+	rows, err := db.QueryContext(ctx, `PRAGMA table_info(research_specs)`)
+	if err != nil {
+		return err
+	}
+	defer rows.Close()
+
+	seenTable := false
+	for rows.Next() {
+		seenTable = true
+		var (
+			cid     int
+			name    string
+			typ     string
+			notNull int
+			def     sql.NullString
+			pk      int
+		)
+		if err := rows.Scan(&cid, &name, &typ, &notNull, &def, &pk); err != nil {
+			return err
+		}
+		if strings.EqualFold(name, "laptop_model") {
+			return nil
+		}
+	}
+	if err := rows.Err(); err != nil {
+		rows.Close()
+		return err
+	}
+	if err := rows.Close(); err != nil {
+		return err
+	}
+	if !seenTable {
+		return fmt.Errorf("research_specs table is missing")
+	}
+	if _, err := db.ExecContext(ctx, `ALTER TABLE research_specs ADD COLUMN laptop_model TEXT NOT NULL DEFAULT ''`); err != nil {
+		if strings.Contains(strings.ToLower(err.Error()), "duplicate column") {
+			return nil
+		}
+		return err
+	}
+	return nil
+}
+
 func mergeCachedSpecs(existing, incoming specs.GeminiSpecs) specs.GeminiSpecs {
 	out := existing
+	if v := strings.TrimSpace(incoming.LaptopModel); v != "" {
+		out.LaptopModel = v
+	}
 	if v := strings.TrimSpace(incoming.CPU); v != "" {
 		out.CPU = v
 	}
@@ -945,14 +998,15 @@ func saveCachedGeminiSpecs(ctx context.Context, dbPath string, adID int64, sourc
 	cpuModel, cpuScore := matchCPU(cpus, strings.TrimSpace(gs.CPU))
 	gpuModel, gpuScore := matchGPU(gpus, strings.TrimSpace(gs.GPU))
 	_, err = db.ExecContext(ctx, `
-INSERT INTO research_specs (ad_id, cpu_model, cpu_score, ram_gb, ssd_gb, gpu_model, gpu_score, updated_at, source)
-VALUES (?,?,?,?,?,?,?,?,?)
+INSERT INTO research_specs (ad_id, laptop_model, cpu_model, cpu_score, ram_gb, ssd_gb, gpu_model, gpu_score, updated_at, source)
+VALUES (?,?,?,?,?,?,?,?,?,?)
 ON CONFLICT(ad_id) DO UPDATE SET
+	laptop_model=excluded.laptop_model,
 	cpu_model=excluded.cpu_model, cpu_score=excluded.cpu_score,
 	ram_gb=excluded.ram_gb, ssd_gb=excluded.ssd_gb,
 	gpu_model=excluded.gpu_model, gpu_score=excluded.gpu_score,
 	updated_at=excluded.updated_at, source=excluded.source`,
-		adID, cpuModel, cpuScore, gs.RAMGB, gs.SSDGB, gpuModel, gpuScore, time.Now().Unix(), source)
+		adID, strings.TrimSpace(gs.LaptopModel), cpuModel, cpuScore, gs.RAMGB, gs.SSDGB, gpuModel, gpuScore, time.Now().Unix(), source)
 	return err
 }
 
