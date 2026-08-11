@@ -47,7 +47,7 @@ type Panel struct {
 	token   string
 	chatID  int64
 	root    string // корень проекта (heartbeat/watchdog в data/)
-	running *atomic.Bool
+	paused  *atomic.Bool
 	started time.Time
 	chCount *atomic.Int64
 	market  MarketProvider
@@ -55,7 +55,7 @@ type Panel struct {
 }
 
 // New создаёт пульт. chatID не распознан → пульт отключён (nil).
-func New(tg *notifier.Telegram, token, chatIDStr, root string, running *atomic.Bool,
+func New(tg *notifier.Telegram, token, chatIDStr, root string, paused *atomic.Bool,
 	started time.Time, chCount *atomic.Int64, market MarketProvider, health RuntimeHealthProvider) *Panel {
 	chatID, err := strconv.ParseInt(strings.TrimSpace(chatIDStr), 10, 64)
 	if err != nil || chatID == 0 {
@@ -63,7 +63,7 @@ func New(tg *notifier.Telegram, token, chatIDStr, root string, running *atomic.B
 	}
 	return &Panel{
 		tg: tg, token: token, chatID: chatID, root: root,
-		running: running, started: started, chCount: chCount, market: market, health: health,
+		paused: paused, started: started, chCount: chCount, market: market, health: health,
 	}
 }
 
@@ -219,19 +219,17 @@ func (p *Panel) dispatch(ctx context.Context, data string, log *slog.Logger) {
 	case "panel", "help":
 		p.sendPanel(ctx)
 	case "start":
-		if !p.running.Load() {
+		if !p.resume() {
 			p.send(ctx, "▶️ Бот уже работает.")
 			return
 		}
-		p.running.Store(false)
 		log.Info("пульт: СТАРТ — поллинг возобновлён")
 		p.send(ctx, "▶️ Запущено: поллинг и воронка снова в работе. Алерты возобновятся со следующего цикла.")
 	case "stop":
-		if p.running.Load() {
+		if !p.pause() {
 			p.send(ctx, "⏹ Бот уже остановлен.")
 			return
 		}
-		p.running.Store(true)
 		log.Warn("пульт: СТОП — поллинг приостановлен")
 		p.send(ctx, "⏹ Остановлено: поллинг и алерты на паузе. Пульт отвечает, watchdog следит. Нажмите ▶️ Старт для возобновления.")
 	case "status":
@@ -246,7 +244,7 @@ func (p *Panel) dispatch(ctx context.Context, data string, log *slog.Logger) {
 func (p *Panel) status(ctx context.Context) {
 	var b strings.Builder
 	mode := "▶️ работает"
-	if p.running.Load() {
+	if p.isPaused() {
 		mode = "⏹ остановлен пультом"
 	}
 	fmt.Fprintf(&b, "🩺 СТАТУС\n\nРежим: %s\nАптайм: %s\n", mode, time.Since(p.started).Round(time.Minute))
@@ -280,7 +278,9 @@ func (p *Panel) status(ctx context.Context) {
 	if tail, err := tailLines(filepath.Join(p.root, "data", "watchdog.log"), 3); err == nil && tail != "" {
 		fmt.Fprintf(&b, "\nwatchdog (последние записи):\n%s\n", tail)
 	}
-	if m := p.market.MarketOnly(); m != nil {
+	if p.market == nil {
+		b.WriteString("\n\u0420\u044b\u043d\u043e\u0447\u043d\u0430\u044f \u043c\u043e\u0434\u0435\u043b\u044c \u0435\u0449\u0451 \u043d\u0435 \u0437\u0430\u0433\u0440\u0443\u0436\u0435\u043d\u0430.\n")
+	} else if m := p.market.MarketOnly(); m != nil {
 		fmt.Fprintf(&b, "\nРыночная модель: лотов %d, пул %d, курс %.2f (%s)\n",
 			len(m.Lots()), len(m.Pool()), m.RsdEurRate(), m.RateSource())
 	} else {
@@ -290,6 +290,26 @@ func (p *Panel) status(ctx context.Context) {
 }
 
 // ---------- отправка ----------
+
+func (p *Panel) isPaused() bool {
+	return p.paused != nil && p.paused.Load()
+}
+
+func (p *Panel) pause() bool {
+	if p.paused == nil || p.paused.Load() {
+		return false
+	}
+	p.paused.Store(true)
+	return true
+}
+
+func (p *Panel) resume() bool {
+	if p.paused == nil || !p.paused.Load() {
+		return false
+	}
+	p.paused.Store(false)
+	return true
+}
 
 func (p *Panel) send(ctx context.Context, text string) {
 	for _, chunk := range splitChunks(text, 4000) {
