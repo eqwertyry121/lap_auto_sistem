@@ -134,6 +134,21 @@ func TestStepUpOutclassesLatitude3510Case(t *testing.T) {
 	}
 }
 
+func TestStepUpOutclassesFujitsuH7510Case(t *testing.T) {
+	target := pricing.Lot{
+		AdID: 449, Title: "Fujitsu H7510 i7-10850H Quadro T1000",
+		Price: 449, CPUScore: 7198, GPUScore: 15125,
+	}
+	step := pricing.Lot{
+		AdID: 450, Title: "Acer Predator Helios i7 RTX",
+		URL:   "https://example.test/acer-predator-helios",
+		Price: 450, CPUScore: 20000, GPUScore: 26087,
+	}
+	if !stepUpOutclasses(target, &step) {
+		t.Fatal("Fujitsu H7510 alert must be suppressed: +€1 gives +106% composite score")
+	}
+}
+
 func TestWithoutProductionOLSKeepsAlternatives(t *testing.T) {
 	dom := pricing.Lot{AdID: 2, URL: "https://example.test/dom", Price: 210, CPUScore: 10000}
 	step := pricing.Lot{AdID: 3, URL: "https://example.test/step", Price: 220, CPUScore: 12000}
