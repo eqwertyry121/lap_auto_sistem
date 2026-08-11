@@ -299,8 +299,9 @@ func Run(ctx context.Context, f *Funnel, cfg *config.Config, gem *vision.GeminiC
 		Title: ad.Name, Description: descPlain, Seller: detail.Seller(),
 		Condition: detail.Condition, IsTrader: detail.IsTrader(), KPIzlog: detail.KPIzlog,
 		IsRenewed: ad.IsRenewed,
-		SellerAds: seller.AdsCount, SellerAgeDays: seller.AgeDays(),
-		Reviews: reviews, SellerTraderSeen: seller.TraderSeen,
+		SellerAds: seller.AdsCount, SellerRecentAds: seller.RecentAdsCount,
+		SellerAgeDays: seller.AgeDays(),
+		Reviews:       reviews, SellerTraderSeen: seller.TraderSeen,
 		SellerKPIzlogSeen: seller.KPIzlogSeen,
 	}
 	if v := filters.L1(facts); v.Class == filters.ClassShop {

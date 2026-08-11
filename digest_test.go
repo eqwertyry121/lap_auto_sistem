@@ -69,7 +69,8 @@ func TestDigestText(t *testing.T) {
 		Price:    240,
 		Currency: "EUR",
 	}}
-	text := digestText(25*time.Hour+13*time.Minute, byStatus, 4, 24677, 858, alerts)
+	processStates := map[string]int{"DETAIL_PENDING": 2, "DONE": 20}
+	text := digestText(25*time.Hour+13*time.Minute, byStatus, 4, 24677, 858, alerts, processStates, 1)
 
 	for _, want := range []string{
 		"Лоты за 24ч:</b> 15",
@@ -77,6 +78,8 @@ func TestDigestText(t *testing.T) {
 		"Челленджи KP (с запуска):</b> 4",
 		"858/24677",
 		"3.5%",
+		"DETAIL_PENDING: 2",
+		"telegram_outbox: 1",
 		"€240",
 	} {
 		if !strings.Contains(text, want) {
@@ -84,7 +87,7 @@ func TestDigestText(t *testing.T) {
 		}
 	}
 	// Длинный заголовок обрезается.
-	if strings.Count(text, "x") != 59 {
-		t.Errorf("заголовок алерта не обрезан до 60 символов")
+	if !strings.Contains(text, strings.Repeat("x", 59)+"…") {
+		t.Errorf("заголовок алерта не обрезан до 60 символов:\n%s", text)
 	}
 }

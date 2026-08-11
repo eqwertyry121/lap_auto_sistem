@@ -12,12 +12,13 @@ import (
 // (правила М3/М6). Открывает базу на каждое обращение: лотов немного,
 // а два писателя (бот и research) уже разведены busy_timeout'ом.
 type SellerInfo struct {
-	Found        bool
-	AdsCount     int    // лотов продавца в датасете (COUNT по user_id)
-	TraderSeen   bool   // KP хоть раз пометил торговцем
-	KPIzlogSeen  bool   // хоть раз была витрина
-	Reviews      int    // отзывов (максимум из виденного)
-	UserCreated  string // дата регистрации аккаунта «2006-01-02 15:04:05»
+	Found          bool
+	AdsCount       int    // лотов продавца в датасете (COUNT по user_id)
+	RecentAdsCount int    // лотов продавца, недавно виденных в поиске/research
+	TraderSeen     bool   // KP хоть раз пометил торговцем
+	KPIzlogSeen    bool   // хоть раз была витрина
+	Reviews        int    // отзывов (максимум из виденного)
+	UserCreated    string // дата регистрации аккаунта «2006-01-02 15:04:05»
 }
 
 // AgeDays — возраст аккаунта в днях; -1 если неизвестен.
@@ -72,6 +73,12 @@ FROM sellers WHERE user_id = ?`, userID).
 	}
 	if ads > info.AdsCount {
 		info.AdsCount = ads
+	}
+	recentSince := time.Now().Add(-30 * 24 * time.Hour).Unix()
+	if err := db.QueryRowContext(ctx,
+		`SELECT COUNT(*) FROM research_ads WHERE user_id = ? AND fetched_at >= ?`,
+		userID, recentSince).Scan(&info.RecentAdsCount); err != nil {
+		return SellerInfo{}, err
 	}
 	return info, nil
 }

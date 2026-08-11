@@ -327,6 +327,7 @@ func searchLevelRow(ad models.SearchAd) researchRow {
 		Snippet:     strings.TrimSpace(ad.DescriptionSnip),
 		Kind:        "UNKNOWN",
 		FetchStatus: "SEARCH",
+		FetchedAt:   time.Now(),
 	}
 }
 

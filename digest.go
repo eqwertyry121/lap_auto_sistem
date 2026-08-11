@@ -34,7 +34,7 @@ func nextDigestTime(now time.Time, h, m int) time.Time {
 // digestText собирает HTML-текст дайджеста. challenges — счётчик с момента
 // запуска (за 24ч не обнуляется — честнее писать как есть).
 func digestText(uptime time.Duration, byStatus map[string]int, challenges int64,
-	total, detailed int, alerts []models.Listing) string {
+	total, detailed int, alerts []models.Listing, processStates map[string]int, pendingOutbox int) string {
 	var b strings.Builder
 	b.WriteString("📊 <b>Дайджест KP-бота</b>\n\n")
 	fmt.Fprintf(&b, "<b>Аптайм:</b> %s\n", uptime.Round(time.Minute))
@@ -57,6 +57,18 @@ func digestText(uptime time.Duration, byStatus map[string]int, challenges int64,
 			detailed, total, 100*float64(detailed)/float64(total))
 	}
 
+	if pendingOutbox > 0 || hasQueueBacklog(processStates) {
+		b.WriteString("<b>Очереди:</b>\n")
+		for _, st := range []string{"DETAIL_PENDING", "EVALUATING", "ALERT_PENDING", "DEAD"} {
+			if n := processStates[st]; n > 0 {
+				fmt.Fprintf(&b, "  · %s: %d\n", st, n)
+			}
+		}
+		if pendingOutbox > 0 {
+			fmt.Fprintf(&b, "  · telegram_outbox: %d\n", pendingOutbox)
+		}
+	}
+
 	if len(alerts) > 0 {
 		b.WriteString("<b>Последние алерты:</b>\n")
 		for _, a := range alerts {
@@ -65,6 +77,15 @@ func digestText(uptime time.Duration, byStatus map[string]int, challenges int64,
 		}
 	}
 	return b.String()
+}
+
+func hasQueueBacklog(processStates map[string]int) bool {
+	for _, st := range []string{"DETAIL_PENDING", "EVALUATING", "ALERT_PENDING", "DEAD"} {
+		if processStates[st] > 0 {
+			return true
+		}
+	}
+	return false
 }
 
 func truncateLine(s string, n int) string {

@@ -4,3 +4,9 @@ secrets/
 *.db
 *.exe
 *.log
+tools/js/
+tools/home.html
+tools/mhome.html
+tools/kp_probe*.cjs
+tools/probe*.ps1
+tools/probe*_out.txt

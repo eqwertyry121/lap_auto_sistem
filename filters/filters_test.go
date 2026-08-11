@@ -74,6 +74,15 @@ func TestL1_BehavioralSignals(t *testing.T) {
 	if v := L1(AdFacts{Title: "Laptop i5", Description: "Prodajem svoj laptop.", SellerAds: 4, SellerAgeDays: 20}); v.Class == ClassShop {
 		t.Errorf("молодой аккаунт сам по себе не должен резать: %v", v.Reasons)
 	}
+	if v := L1(AdFacts{Title: "Laptop i5", Description: "Prodajem svoj laptop.", SellerRecentAds: 8}); v.Class != ClassShop {
+		t.Errorf("8 свежих лотов должны резать как активного перекупа: %s (%v)", v.Class, v.Reasons)
+	}
+	if v := L1(AdFacts{Title: "Laptop i5", Description: "Prodajem svoj laptop.", SellerRecentAds: 4}); v.Class == ClassShop {
+		t.Errorf("4 свежих лота без других сигналов не должны резать: %v", v.Reasons)
+	}
+	if v := L1(AdFacts{Title: "Laptop i5", Description: "Prodajem svoj laptop.", SellerRecentAds: 4, IsRenewed: true}); v.Class != ClassShop {
+		t.Errorf("4 свежих лота + автообновление должны резать: %s (%v)", v.Class, v.Reasons)
+	}
 }
 
 func TestL1_SellerHistoryAndName(t *testing.T) {

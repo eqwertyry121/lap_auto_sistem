@@ -24,18 +24,19 @@ const (
 // MedianEUR = 0 означает «медианы конфигурации нет» (кросс-чек L2 не
 // проводится, маркеры решают сами).
 type AdFacts struct {
-	Title         string
-	Description   string // plain text без HTML
-	Seller        string
-	Condition     string // поле KP: new/used/broken/""
-	IsTrader      bool   // KP пометил торговца (М1)
-	KPIzlog       bool   // витрина KP Izlog (М2)
-	IsRenewed     bool   // автообновление объявления
-	PriceEUR      float64
-	MedianEUR     float64
-	SellerAds     int // активных лотов продавца по реестру (М3)
-	SellerAgeDays int // возраст аккаунта в днях; -1 = неизвестен (М6)
-	Reviews       int // отзывы продавца
+	Title           string
+	Description     string // plain text без HTML
+	Seller          string
+	Condition       string // поле KP: new/used/broken/""
+	IsTrader        bool   // KP пометил торговца (М1)
+	KPIzlog         bool   // витрина KP Izlog (М2)
+	IsRenewed       bool   // автообновление объявления
+	PriceEUR        float64
+	MedianEUR       float64
+	SellerAds       int // активных лотов продавца по реестру (М3)
+	SellerRecentAds int // лотов этого user_id, недавно виденных в выдаче/research
+	SellerAgeDays   int // возраст аккаунта в днях; -1 = неизвестен (М6)
+	Reviews         int // отзывы продавца
 
 	// Исторические метки из research.db: если этот user_id уже встречался как
 	// торговец/витрина, текущий лот считаем коммерческим даже без свежей метки.
@@ -69,9 +70,11 @@ var sellerNameShopMarkers = []string{
 }
 
 const (
-	sellerAdsHardThreshold = 12
-	sellerAdsSoftThreshold = 6
-	highReviewsThreshold   = 25
+	sellerAdsHardThreshold    = 12
+	sellerAdsSoftThreshold    = 6
+	sellerRecentHardThreshold = 8
+	sellerRecentSoftThreshold = 4
+	highReviewsThreshold      = 25
 )
 
 // L1 — фильтр магазинов. PLAN_v8 (2026-08-06): к детекции по тексту описания
@@ -130,8 +133,24 @@ func L1(f AdFacts) Verdict {
 			[]string{fmt.Sprintf("М3: у продавца %d лотов в датасете (≥%d) — похоже на перекупа/магазин",
 				f.SellerAds, sellerAdsHardThreshold)}}
 	}
+	if f.SellerRecentAds >= sellerRecentHardThreshold {
+		return Verdict{ClassShop,
+			[]string{fmt.Sprintf("М3-recent: у продавца %d свежих лотов (≥%d) — активный перекуп/магазин",
+				f.SellerRecentAds, sellerRecentHardThreshold)}}
+	}
 	if f.SellerAds >= sellerAdsSoftThreshold && (f.IsRenewed || f.Reviews >= highReviewsThreshold || weight > 0) {
 		why := []string{fmt.Sprintf("М3: у продавца %d лотов в датасете (≥%d)", f.SellerAds, sellerAdsSoftThreshold)}
+		if f.IsRenewed {
+			why = append(why, "автообновление объявления")
+		}
+		if f.Reviews >= highReviewsThreshold {
+			why = append(why, fmt.Sprintf("%d отзывов", f.Reviews))
+		}
+		why = append(why, reasons...)
+		return Verdict{ClassShop, why}
+	}
+	if f.SellerRecentAds >= sellerRecentSoftThreshold && (f.IsRenewed || f.Reviews >= highReviewsThreshold || weight > 0) {
+		why := []string{fmt.Sprintf("М3-recent: у продавца %d свежих лотов (≥%d)", f.SellerRecentAds, sellerRecentSoftThreshold)}
 		if f.IsRenewed {
 			why = append(why, "автообновление объявления")
 		}

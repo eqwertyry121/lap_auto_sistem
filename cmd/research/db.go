@@ -298,10 +298,10 @@ func (s *researchStore) refreshSearch(ctx context.Context, r researchRow) error 
 	_, err := s.db.ExecContext(ctx, `
 UPDATE research_ads SET
 	price=?, currency=?, posted=?, condition=?, kp_izlog=?,
-	user_id=?, view_count=?, is_renewed=?, snippet=?
+	user_id=?, view_count=?, is_renewed=?, snippet=?, fetched_at=?
 WHERE ad_id=?`,
 		r.Price, r.Currency, r.Posted, r.Condition, boolInt(r.KPIzlog),
-		r.UserID, r.ViewCount, boolInt(r.IsRenewed), r.Snippet, r.AdID)
+		r.UserID, r.ViewCount, boolInt(r.IsRenewed), r.Snippet, r.FetchedAt.Unix(), r.AdID)
 	return err
 }
 

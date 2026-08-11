@@ -258,8 +258,17 @@ func sendDigest(ctx context.Context, cfg *config.Config, store *storage.Store,
 	} else {
 		log.Warn("дайджест: покрытие research.db недоступно", "err", cerr)
 	}
+	processStates, err := store.CountByProcessState(ctx)
+	if err != nil {
+		log.Warn("дайджест: process states", "err", err)
+		processStates = nil
+	}
+	pendingOutbox, err := store.PendingTelegramOutbox(ctx)
+	if err != nil {
+		log.Warn("дайджест: telegram outbox", "err", err)
+	}
 	text := digestText(time.Since(st.startedAt), byStatus, st.challengeCount.Load(),
-		total, detailed, alerts)
+		total, detailed, alerts, processStates, pendingOutbox)
 	if err := tg.SendRaw(ctx, text); err != nil {
 		log.Error("дайджест: отправка", "err", err)
 	} else {

@@ -519,6 +519,25 @@ func (s *Store) PendingTelegramOutbox(ctx context.Context) (int, error) {
 	return n, err
 }
 
+func (s *Store) CountByProcessState(ctx context.Context) (map[string]int, error) {
+	rows, err := s.db.QueryContext(ctx,
+		`SELECT process_state, COUNT(*) FROM market_listings WHERE process_state != '' GROUP BY process_state`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := make(map[string]int)
+	for rows.Next() {
+		var state string
+		var n int
+		if err := rows.Scan(&state, &n); err != nil {
+			return nil, err
+		}
+		out[state] = n
+	}
+	return out, rows.Err()
+}
+
 // VerdictRow — строка отчёта по вердиктам воронки (пульт «Алмазы»).
 type VerdictRow struct {
 	AdID        int64

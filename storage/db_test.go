@@ -39,6 +39,13 @@ func TestDiscoveredListingCanBeClaimedAfterExistingRow(t *testing.T) {
 	if len(got) != 1 || got[0].AdID != 1 {
 		t.Fatalf("claimed %+v, want one listing 1", got)
 	}
+	byState, err := st.CountByProcessState(ctx)
+	if err != nil {
+		t.Fatalf("count by process state: %v", err)
+	}
+	if byState[string(models.ProcessDetailPending)] != 1 {
+		t.Fatalf("process states = %+v, want one DETAIL_PENDING", byState)
+	}
 }
 
 func TestFunnelAlertPendingBecomesAlertedOnlyAfterOutboxSent(t *testing.T) {
