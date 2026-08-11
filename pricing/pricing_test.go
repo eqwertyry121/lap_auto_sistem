@@ -233,6 +233,154 @@ VALUES (?, 'i5-1135G7', 10000, 16, 512)`, adID); err != nil {
 	}
 }
 
+func TestLoadMarketAppliesManualLabels(t *testing.T) {
+	dbPath := filepath.Join(t.TempDir(), "research.db")
+	db, err := sql.Open("sqlite", dbPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	schema := `
+CREATE TABLE research_ads (
+	ad_id INTEGER PRIMARY KEY,
+	title TEXT NOT NULL DEFAULT '',
+	url TEXT NOT NULL DEFAULT '',
+	price REAL NOT NULL DEFAULT 0,
+	currency TEXT NOT NULL DEFAULT 'EUR',
+	posted TEXT NOT NULL DEFAULT '',
+	kind TEXT NOT NULL DEFAULT 'UNKNOWN',
+	description TEXT NOT NULL DEFAULT '',
+	seller TEXT NOT NULL DEFAULT '',
+	is_trader INTEGER NOT NULL DEFAULT 0,
+	kp_izlog INTEGER NOT NULL DEFAULT 0,
+	is_renewed INTEGER NOT NULL DEFAULT 0,
+	user_id INTEGER NOT NULL DEFAULT 0,
+	fetched_at INTEGER NOT NULL DEFAULT 0,
+	fetch_status TEXT NOT NULL DEFAULT ''
+);
+CREATE TABLE research_specs (
+	ad_id INTEGER PRIMARY KEY,
+	cpu_model TEXT NOT NULL DEFAULT '',
+	cpu_score REAL NOT NULL DEFAULT 0,
+	ram_gb INTEGER NOT NULL DEFAULT 0,
+	ssd_gb INTEGER NOT NULL DEFAULT 0,
+	gpu_model TEXT NOT NULL DEFAULT '',
+	gpu_score REAL NOT NULL DEFAULT 0
+);
+CREATE TABLE sellers (
+	user_id INTEGER PRIMARY KEY,
+	trader_seen INTEGER NOT NULL DEFAULT 0,
+	kpizlog_seen INTEGER NOT NULL DEFAULT 0,
+	reviews INTEGER NOT NULL DEFAULT 0,
+	user_created TEXT NOT NULL DEFAULT '',
+	label TEXT NOT NULL DEFAULT ''
+);
+CREATE TABLE labels (
+	target_type TEXT NOT NULL,
+	target_id INTEGER NOT NULL,
+	label TEXT NOT NULL,
+	UNIQUE(target_type, target_id)
+);`
+	if _, err := db.Exec(schema); err != nil {
+		t.Fatal(err)
+	}
+
+	now := time.Now()
+	posted := now.Format("2006-01-02 15:04:05")
+	insertAd := func(adID, userID int64, title string, price float64) {
+		t.Helper()
+		if _, err := db.Exec(`
+INSERT INTO research_ads (
+	ad_id, title, url, price, currency, posted, kind, description, seller,
+	is_trader, kp_izlog, is_renewed, user_id, fetched_at, fetch_status
+) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+			adID, title, fmt.Sprintf("https://kp.test/%d", adID),
+			price, "EUR", posted, "USED", "Clean laptop.", "Seller",
+			0, 0, 0, userID, now.Unix(), "OK"); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := db.Exec(`
+INSERT INTO research_specs (ad_id, cpu_model, cpu_score, ram_gb, ssd_gb)
+VALUES (?, 'i5-1135G7', 10000, 16, 512)`, adID); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, err := db.Exec(`
+INSERT INTO sellers (user_id, label) VALUES
+	(10, ''),
+	(20, ''),
+	(30, ''),
+	(40, 'SHOP'),
+	(50, '')`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec(`
+INSERT INTO labels (target_type, target_id, label) VALUES
+	('seller', 10, 'SHOP'),
+	('seller', 20, 'PRIVATE'),
+	('ad', 30, 'JUNK'),
+	('ad', 50, 'CLEAN')`); err != nil {
+		t.Fatal(err)
+	}
+
+	insertAd(10, 10, "Manual shop seller", 300)
+	for i := 0; i < 12; i++ {
+		insertAd(int64(100+i), 20, fmt.Sprintf("Manual private seller %d", i), 310+float64(i))
+	}
+	insertAd(30, 30, "Manual junk ad", 320)
+	insertAd(40, 40, "Seller table shop fallback", 330)
+	insertAd(50, 50, "Laptop za delove", 340)
+
+	if err := db.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	m, err := LoadMarket(context.Background(), dbPath, Options{
+		MedianWindowDays:  60,
+		HedonicWindowDays: 90,
+		RSDEurRate:        117.2,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	lots := make(map[int64]Lot)
+	for _, lot := range m.Lots() {
+		lots[lot.AdID] = lot
+	}
+	if !lots[10].IsShop {
+		t.Fatalf("seller label SHOP from labels table must mark ad as shop")
+	}
+	if lots[100].IsShop {
+		t.Fatalf("seller label PRIVATE must override bulk-seller heuristics")
+	}
+	if lots[30].Kind != "BROKEN" {
+		t.Fatalf("ad label JUNK must mark lot as BROKEN, got %q", lots[30].Kind)
+	}
+	if !lots[40].IsShop {
+		t.Fatalf("seller label SHOP from sellers.label fallback must mark ad as shop")
+	}
+	if lots[50].Kind != "USED" {
+		t.Fatalf("ad label CLEAN must keep lot usable, got kind %q", lots[50].Kind)
+	}
+
+	poolIDs := make(map[int64]bool)
+	for _, lot := range m.Pool() {
+		poolIDs[lot.AdID] = true
+	}
+	if poolIDs[10] || poolIDs[30] || poolIDs[40] {
+		t.Fatalf("manual SHOP/JUNK lots must be excluded from market pool: %#v", poolIDs)
+	}
+	if !poolIDs[100] {
+		t.Fatalf("manual PRIVATE lot must stay in market pool")
+	}
+	if !poolIDs[50] {
+		t.Fatalf("manual CLEAN lot must stay in market pool")
+	}
+	if got, want := len(poolIDs), 13; got != want {
+		t.Fatalf("market pool size = %d, want %d", got, want)
+	}
+}
+
 func TestStaleLotsExcluded(t *testing.T) {
 	var lots []Lot
 	for i := 0; i < 8; i++ {

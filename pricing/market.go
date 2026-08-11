@@ -27,19 +27,20 @@ import (
 
 // Lot — лот рынка с ценой в EUR и распознанным железом.
 type Lot struct {
-	AdID     int64
-	Title    string
-	URL      string
-	Price    float64 // нормализовано в EUR
-	Posted   time.Time
-	Kind     string // NEW / USED / BROKEN / UNKNOWN
-	IsShop   bool   // is_trader или kp_izlog
-	CPUModel string
-	CPUScore float64
-	RAMGB    int
-	SSDGB    int
-	GPUModel string
-	GPUScore float64
+	AdID       int64
+	Title      string
+	URL        string
+	Price      float64 // нормализовано в EUR
+	Posted     time.Time
+	Kind       string // NEW / USED / BROKEN / UNKNOWN
+	IsShop     bool   // is_trader или kp_izlog
+	L2Reviewed bool   // L2 ran with full description and manual labels
+	CPUModel   string
+	CPUScore   float64
+	RAMGB      int
+	SSDGB      int
+	GPUModel   string
+	GPUScore   float64
 }
 
 // Options — параметры построения рыночной модели.
@@ -189,18 +190,40 @@ func loadLots(ctx context.Context, dbPath string, rsdRate float64) ([]Lot, error
 		return nil, err
 	}
 
+	labelJoins := ""
+	sellerLabelExpr := "''"
+	adLabelExpr := "''"
+	hasLabels := sqliteTableExists(ctx, db, "labels")
+	hasSellerLabel := sqliteColumnExists(ctx, db, "sellers", "label")
+	if hasLabels {
+		labelJoins = `
+LEFT JOIN labels slbl ON slbl.target_type='seller' AND slbl.target_id = a.user_id
+LEFT JOIN labels albl ON albl.target_type='ad' AND albl.target_id = a.ad_id`
+		sellerLabelExpr = "COALESCE(slbl.label,'')"
+		adLabelExpr = "COALESCE(albl.label,'')"
+	}
+	if hasSellerLabel {
+		if hasLabels {
+			sellerLabelExpr = "COALESCE(slbl.label, sel.label, '')"
+		} else {
+			sellerLabelExpr = "COALESCE(sel.label, '')"
+		}
+	}
+
 	recentSince := time.Now().Add(-30 * 24 * time.Hour).Unix()
-	rows, err := db.QueryContext(ctx, `
+	rows, err := db.QueryContext(ctx, fmt.Sprintf(`
 SELECT a.ad_id, a.title, a.url, a.price, a.currency, a.posted, a.kind,
 	a.description, a.seller, a.is_trader, a.kp_izlog, a.is_renewed,
 	COALESCE(sa.ads_count,0), COALESCE(sra.recent_ads_count,0),
 	COALESCE(sel.trader_seen,0), COALESCE(sel.kpizlog_seen,0),
 	COALESCE(sel.reviews,0), COALESCE(sel.user_created,''),
+	%s, %s,
 	COALESCE(sp.cpu_model,''), COALESCE(sp.cpu_score,0), COALESCE(sp.ram_gb,0),
 	COALESCE(sp.ssd_gb,0), COALESCE(sp.gpu_model,''), COALESCE(sp.gpu_score,0)
 FROM research_ads a
 LEFT JOIN research_specs sp ON sp.ad_id = a.ad_id
 LEFT JOIN sellers sel ON sel.user_id = a.user_id
+%s
 LEFT JOIN (
 	SELECT user_id, COUNT(*) AS ads_count
 	FROM research_ads
@@ -215,7 +238,7 @@ LEFT JOIN (
 ) sra ON sra.user_id = a.user_id
 WHERE a.fetch_status='OK'
   AND a.kind='USED'
-  AND a.url != ''`, recentSince)
+  AND a.url != ''`, sellerLabelExpr, adLabelExpr, labelJoins), recentSince)
 	if err != nil {
 		return nil, err
 	}
@@ -227,6 +250,7 @@ WHERE a.fetch_status='OK'
 			l                                      Lot
 			price                                  float64
 			currency, posted, desc, seller, joined string
+			sellerLabel, adLabel                   string
 			isTrader, kpIzlog, isRenewed           int
 			sellerAds, sellerRecentAds             int
 			sellerTraderSeen, sellerKPIzlogSeen    int
@@ -235,28 +259,33 @@ WHERE a.fetch_status='OK'
 		if err := rows.Scan(&l.AdID, &l.Title, &l.URL, &price, &currency, &posted, &l.Kind,
 			&desc, &seller, &isTrader, &kpIzlog, &isRenewed,
 			&sellerAds, &sellerRecentAds, &sellerTraderSeen, &sellerKPIzlogSeen, &reviews, &joined,
+			&sellerLabel, &adLabel,
 			&l.CPUModel, &l.CPUScore, &l.RAMGB, &l.SSDGB,
 			&l.GPUModel, &l.GPUScore); err != nil {
 			return nil, err
 		}
 		l.Price = ToEUR(price, currency, rsdRate)
-		l.IsShop = isTrader != 0 || kpIzlog != 0
-		if !l.IsShop {
-			v := filters.L1(filters.AdFacts{
-				Title:             l.Title,
-				Description:       filters.StripHTML(desc),
-				Seller:            seller,
-				IsTrader:          isTrader != 0,
-				KPIzlog:           kpIzlog != 0,
-				IsRenewed:         isRenewed != 0,
-				SellerAds:         sellerAds,
-				SellerRecentAds:   sellerRecentAds,
-				SellerAgeDays:     sellerAgeDays(joined),
-				Reviews:           reviews,
-				SellerTraderSeen:  sellerTraderSeen != 0,
-				SellerKPIzlogSeen: sellerKPIzlogSeen != 0,
-			})
-			l.IsShop = v.Class == filters.ClassShop
+		filterFacts := filters.AdFacts{
+			Title:             l.Title,
+			Description:       filters.StripHTML(desc),
+			Seller:            seller,
+			SellerLabel:       sellerLabel,
+			AdLabel:           adLabel,
+			IsTrader:          isTrader != 0,
+			KPIzlog:           kpIzlog != 0,
+			IsRenewed:         isRenewed != 0,
+			SellerAds:         sellerAds,
+			SellerRecentAds:   sellerRecentAds,
+			SellerAgeDays:     sellerAgeDays(joined),
+			Reviews:           reviews,
+			SellerTraderSeen:  sellerTraderSeen != 0,
+			SellerKPIzlogSeen: sellerKPIzlogSeen != 0,
+		}
+		l.IsShop = filters.L1(filterFacts).Class == filters.ClassShop
+		l2 := filters.L2(filterFacts)
+		l.L2Reviewed = true
+		if l2.Class == filters.JunkPartsOnly {
+			l.Kind = "BROKEN"
 		}
 		if posted != "" {
 			if t, perr := time.Parse("2006-01-02 15:04:05", posted); perr == nil {
@@ -266,6 +295,38 @@ WHERE a.fetch_status='OK'
 		out = append(out, l)
 	}
 	return out, rows.Err()
+}
+
+func sqliteTableExists(ctx context.Context, db *sql.DB, name string) bool {
+	var n int
+	err := db.QueryRowContext(ctx,
+		`SELECT COUNT(*) FROM sqlite_master WHERE type IN ('table','view') AND name = ?`, name).Scan(&n)
+	return err == nil && n > 0
+}
+
+func sqliteColumnExists(ctx context.Context, db *sql.DB, table, column string) bool {
+	rows, err := db.QueryContext(ctx, fmt.Sprintf(`PRAGMA table_info(%s)`, table))
+	if err != nil {
+		return false
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var (
+			cid     int
+			name    string
+			typ     string
+			notNull int
+			def     sql.NullString
+			pk      int
+		)
+		if err := rows.Scan(&cid, &name, &typ, &notNull, &def, &pk); err != nil {
+			return false
+		}
+		if strings.EqualFold(name, column) {
+			return true
+		}
+	}
+	return false
 }
 
 func sellerAgeDays(created string) int {
@@ -296,7 +357,7 @@ func (m *Market) statsPool(windowDays int) []Lot {
 		if l.Price < priceFloor || l.Price > priceCeil {
 			continue
 		}
-		if filters.L2(filters.AdFacts{Title: l.Title, PriceEUR: l.Price}).Class == filters.JunkPartsOnly {
+		if !l.L2Reviewed && filters.L2(filters.AdFacts{Title: l.Title, PriceEUR: l.Price}).Class == filters.JunkPartsOnly {
 			continue
 		}
 		if l.Posted.IsZero() || l.Posted.Before(cutoff) {
@@ -331,7 +392,7 @@ func (m *Market) hedonicTraining(windowDays int) []Lot {
 		if l.Price < priceFloor || l.Price > priceCeil {
 			continue
 		}
-		if filters.L2(filters.AdFacts{Title: l.Title, PriceEUR: l.Price}).Class == filters.JunkPartsOnly {
+		if !l.L2Reviewed && filters.L2(filters.AdFacts{Title: l.Title, PriceEUR: l.Price}).Class == filters.JunkPartsOnly {
 			continue
 		}
 		if l.Posted.IsZero() || l.Posted.Before(cutoff) {
