@@ -52,6 +52,25 @@ func TestOpenConfiguresSQLitePragmasAndIntegrityCheck(t *testing.T) {
 	}
 }
 
+func TestOpenRecordsSchemaMigrationVersion(t *testing.T) {
+	st := openTestStore(t)
+
+	var name string
+	var appliedAt int64
+	if err := st.db.QueryRow(
+		`SELECT name, applied_at FROM schema_migrations WHERE version = ?`,
+		storageSchemaVersion,
+	).Scan(&name, &appliedAt); err != nil {
+		t.Fatalf("read schema migration: %v", err)
+	}
+	if name != "storage-main" {
+		t.Fatalf("migration name = %q", name)
+	}
+	if appliedAt <= 0 {
+		t.Fatalf("applied_at = %d", appliedAt)
+	}
+}
+
 func TestDiscoveredListingCanBeClaimedAfterExistingRow(t *testing.T) {
 	ctx := context.Background()
 	st := openTestStore(t)

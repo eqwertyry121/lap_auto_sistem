@@ -21,7 +21,15 @@ type Store struct {
 	path string
 }
 
+const storageSchemaVersion = 1
+
 const schema = `
+CREATE TABLE IF NOT EXISTS schema_migrations (
+	version    INTEGER PRIMARY KEY,
+	name       TEXT NOT NULL DEFAULT '',
+	applied_at INTEGER NOT NULL DEFAULT 0
+);
+
 CREATE TABLE IF NOT EXISTS market_listings (
 	ad_id             INTEGER PRIMARY KEY,
 	title             TEXT NOT NULL DEFAULT '',
@@ -83,13 +91,9 @@ func Open(path string) (*Store, error) {
 		db.Close()
 		return nil, fmt.Errorf("sqlite setup: %w", err)
 	}
-	if _, err := db.Exec(schema); err != nil {
+	if err := applyStorageSchema(db); err != nil {
 		db.Close()
-		return nil, fmt.Errorf("применение схемы: %w", err)
-	}
-	if err := migrateListingAudit(db); err != nil {
-		db.Close()
-		return nil, fmt.Errorf("миграция аудита: %w", err)
+		return nil, err
 	}
 	if err := checkSQLiteIntegrity(db); err != nil {
 		db.Close()
@@ -98,9 +102,39 @@ func Open(path string) (*Store, error) {
 	return &Store{db: db, path: path}, nil
 }
 
+type schemaRunner interface {
+	Exec(query string, args ...any) (sql.Result, error)
+	Query(query string, args ...any) (*sql.Rows, error)
+}
+
+func applyStorageSchema(db *sql.DB) error {
+	tx, err := db.Begin()
+	if err != nil {
+		return fmt.Errorf("begin schema migration: %w", err)
+	}
+	defer tx.Rollback()
+
+	if _, err := tx.Exec(schema); err != nil {
+		return fmt.Errorf("apply schema: %w", err)
+	}
+	if err := migrateListingAudit(tx); err != nil {
+		return fmt.Errorf("migrate listing audit: %w", err)
+	}
+	if _, err := tx.Exec(
+		`INSERT OR IGNORE INTO schema_migrations (version, name, applied_at) VALUES (?, ?, ?)`,
+		storageSchemaVersion, "storage-main", time.Now().Unix(),
+	); err != nil {
+		return fmt.Errorf("record schema migration: %w", err)
+	}
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("commit schema migration: %w", err)
+	}
+	return nil
+}
+
 // migrateListingAudit — колонки аудита вердиктов воронки (PLAN_v4 §4.4).
 // ALTER TABLE без IF NOT EXISTS — проверяем pragma'ми.
-func migrateListingAudit(db *sql.DB) error {
+func migrateListingAudit(db schemaRunner) error {
 	cols := map[string]bool{}
 	rows, err := db.Query(`PRAGMA table_info(market_listings)`)
 	if err != nil {
