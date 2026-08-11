@@ -15,6 +15,18 @@ const BaseURL = "https://www.kupujemprodajem.com"
 
 type Status string
 
+type ProcessState string
+
+const (
+	ProcessDiscovered    ProcessState = "DISCOVERED"
+	ProcessDetailPending ProcessState = "DETAIL_PENDING"
+	ProcessEnrichPending ProcessState = "ENRICH_PENDING"
+	ProcessEvaluating    ProcessState = "EVALUATING"
+	ProcessAlertPending  ProcessState = "ALERT_PENDING"
+	ProcessDone          ProcessState = "DONE"
+	ProcessDead          ProcessState = "DEAD"
+)
+
 const (
 	StatusNew         Status = "NEW"          // новый лот, ждёт обработки
 	StatusScanned     Status = "SCANNED"      // добавлен сканером рынка (исторические данные)
@@ -48,6 +60,11 @@ type Listing struct {
 	Description    string
 	Seller         string
 	Status         Status
+	ProcessState   ProcessState
+	AttemptCount   int
+	NextAttemptAt  time.Time
+	LeaseUntil     time.Time
+	LastError      string
 	Verdict        Verdict
 	SyncedToSheets bool
 	CreatedAt      time.Time

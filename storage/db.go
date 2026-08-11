@@ -37,11 +37,33 @@ CREATE TABLE IF NOT EXISTS market_listings (
 	reason            TEXT NOT NULL DEFAULT '',
 	specs             TEXT NOT NULL DEFAULT '',
 	synced_to_sheets  INTEGER NOT NULL DEFAULT 0,
-	created_at        INTEGER NOT NULL DEFAULT 0
+	created_at        INTEGER NOT NULL DEFAULT 0,
+	process_state     TEXT NOT NULL DEFAULT '',
+	attempt_count     INTEGER NOT NULL DEFAULT 0,
+	next_attempt_at   INTEGER NOT NULL DEFAULT 0,
+	lease_until       INTEGER NOT NULL DEFAULT 0,
+	last_error        TEXT NOT NULL DEFAULT ''
 );
 CREATE INDEX IF NOT EXISTS idx_ml_status  ON market_listings(status);
 CREATE INDEX IF NOT EXISTS idx_ml_synced  ON market_listings(synced_to_sheets);
 CREATE INDEX IF NOT EXISTS idx_ml_created ON market_listings(created_at);
+
+CREATE TABLE IF NOT EXISTS telegram_outbox (
+	id              INTEGER PRIMARY KEY AUTOINCREMENT,
+	ad_id           INTEGER NOT NULL DEFAULT 0,
+	kind            TEXT NOT NULL DEFAULT '',
+	text            TEXT NOT NULL DEFAULT '',
+	url             TEXT NOT NULL DEFAULT '',
+	final_status    TEXT NOT NULL DEFAULT '',
+	attempt_count   INTEGER NOT NULL DEFAULT 0,
+	next_attempt_at INTEGER NOT NULL DEFAULT 0,
+	lease_until     INTEGER NOT NULL DEFAULT 0,
+	last_error      TEXT NOT NULL DEFAULT '',
+	message_id      INTEGER NOT NULL DEFAULT 0,
+	created_at      INTEGER NOT NULL DEFAULT 0,
+	sent_at         INTEGER NOT NULL DEFAULT 0
+);
+CREATE INDEX IF NOT EXISTS idx_tgo_due ON telegram_outbox(sent_at, next_attempt_at, lease_until);
 `
 
 func Open(path string) (*Store, error) {
@@ -95,6 +117,11 @@ func migrateListingAudit(db *sql.DB) error {
 		{"deviation", `ALTER TABLE market_listings ADD COLUMN deviation REAL NOT NULL DEFAULT 0`},
 		{"group_n", `ALTER TABLE market_listings ADD COLUMN group_n INTEGER NOT NULL DEFAULT 0`},
 		{"alternatives", `ALTER TABLE market_listings ADD COLUMN alternatives TEXT NOT NULL DEFAULT ''`},
+		{"process_state", `ALTER TABLE market_listings ADD COLUMN process_state TEXT NOT NULL DEFAULT ''`},
+		{"attempt_count", `ALTER TABLE market_listings ADD COLUMN attempt_count INTEGER NOT NULL DEFAULT 0`},
+		{"next_attempt_at", `ALTER TABLE market_listings ADD COLUMN next_attempt_at INTEGER NOT NULL DEFAULT 0`},
+		{"lease_until", `ALTER TABLE market_listings ADD COLUMN lease_until INTEGER NOT NULL DEFAULT 0`},
+		{"last_error", `ALTER TABLE market_listings ADD COLUMN last_error TEXT NOT NULL DEFAULT ''`},
 	} {
 		if cols[m.col] {
 			continue
@@ -102,6 +129,22 @@ func migrateListingAudit(db *sql.DB) error {
 		if _, err := db.Exec(m.stmt); err != nil {
 			return err
 		}
+	}
+	if _, err := db.Exec(`
+UPDATE market_listings
+SET process_state = 'DETAIL_PENDING', next_attempt_at = 0, lease_until = 0
+WHERE process_state = '' AND status IN ('NEW', 'ERROR');
+UPDATE market_listings
+SET process_state = 'ALERT_PENDING', next_attempt_at = 0, lease_until = 0
+WHERE process_state = '' AND status = 'ALERT_PENDING';
+UPDATE market_listings
+SET process_state = 'DONE'
+WHERE process_state = '' AND status IN ('SCANNED','SKIPPED_SPAM','SKIPPED_BAN','ALERTED','NEED_CHECK','NO_DEAL');
+`); err != nil {
+		return err
+	}
+	if _, err := db.Exec(`CREATE INDEX IF NOT EXISTS idx_ml_process_due ON market_listings(process_state, next_attempt_at, lease_until)`); err != nil {
+		return err
 	}
 	return nil
 }
@@ -117,13 +160,188 @@ func (s *Store) Exists(ctx context.Context, adID int64) (bool, error) {
 // InsertListing пишет новый лот (INSERT OR IGNORE — повторная вставка не ошибка).
 func (s *Store) InsertListing(ctx context.Context, l models.Listing) error {
 	_, err := s.db.ExecContext(ctx,
-		`INSERT OR IGNORE INTO market_listings (ad_id, title, price, currency, url, status, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)`,
-		l.AdID, l.Title, l.Price, l.Currency, l.URL, string(l.Status), l.CreatedAt.Unix())
+		`INSERT OR IGNORE INTO market_listings (ad_id, title, price, currency, url, status, created_at, process_state, next_attempt_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		l.AdID, l.Title, l.Price, l.Currency, l.URL, string(l.Status), l.CreatedAt.Unix(), string(l.ProcessState), unixOrZero(l.NextAttemptAt))
 	return err
 }
 
 func (s *Store) SetStatus(ctx context.Context, adID int64, st models.Status) error {
 	_, err := s.db.ExecContext(ctx, `UPDATE market_listings SET status = ? WHERE ad_id = ?`, string(st), adID)
+	return err
+}
+
+func (s *Store) UpsertDiscovered(ctx context.Context, l models.Listing) error {
+	if l.CreatedAt.IsZero() {
+		l.CreatedAt = time.Now()
+	}
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+
+	var status, state string
+	err = tx.QueryRowContext(ctx, `SELECT status, process_state FROM market_listings WHERE ad_id = ?`, l.AdID).Scan(&status, &state)
+	if err == sql.ErrNoRows {
+		_, err = tx.ExecContext(ctx, `
+INSERT INTO market_listings (ad_id, title, price, currency, url, status, created_at, process_state, next_attempt_at, lease_until)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?, 0, 0)`,
+			l.AdID, l.Title, l.Price, l.Currency, l.URL,
+			string(models.ProcessDetailPending), l.CreatedAt.Unix(), string(models.ProcessDetailPending))
+		if err != nil {
+			return err
+		}
+		return tx.Commit()
+	}
+	if err != nil {
+		return err
+	}
+
+	if listingClosed(status, state) {
+		_, err = tx.ExecContext(ctx,
+			`UPDATE market_listings SET title = ?, price = ?, currency = ?, url = ? WHERE ad_id = ?`,
+			l.Title, l.Price, l.Currency, l.URL, l.AdID)
+	} else {
+		nextState := state
+		if nextState == "" || nextState == string(models.ProcessDiscovered) {
+			nextState = string(models.ProcessDetailPending)
+		}
+		nextStatus := status
+		if nextStatus == "" || nextStatus == string(models.StatusNew) || nextStatus == string(models.StatusError) {
+			nextStatus = nextState
+		}
+		_, err = tx.ExecContext(ctx, `
+UPDATE market_listings
+SET title = ?, price = ?, currency = ?, url = ?, status = ?, process_state = ?
+WHERE ad_id = ?`,
+			l.Title, l.Price, l.Currency, l.URL, nextStatus, nextState, l.AdID)
+	}
+	if err != nil {
+		return err
+	}
+	return tx.Commit()
+}
+
+func listingClosed(status, state string) bool {
+	switch state {
+	case string(models.ProcessDone), string(models.ProcessDead), string(models.ProcessAlertPending):
+		return true
+	}
+	switch status {
+	case string(models.StatusScanned), string(models.StatusSkippedSpam), string(models.StatusSkippedBan),
+		string(models.StatusAlerted), string(models.StatusNeedCheck), string(models.StatusNoDeal):
+		return true
+	}
+	return false
+}
+
+func (s *Store) ClaimDueListings(ctx context.Context, states []models.ProcessState, limit int, lease time.Duration) ([]models.Listing, error) {
+	if limit <= 0 || len(states) == 0 {
+		return nil, nil
+	}
+	now := time.Now().Unix()
+	leaseUntil := time.Now().Add(lease).Unix()
+	args := make([]any, 0, len(states)+3)
+	ph := make([]string, 0, len(states))
+	for _, st := range states {
+		ph = append(ph, "?")
+		args = append(args, string(st))
+	}
+	args = append(args, now, now, limit)
+
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return nil, err
+	}
+	defer tx.Rollback()
+
+	rows, err := tx.QueryContext(ctx, `
+SELECT ad_id, title, price, currency, url, description, seller, status, process_state,
+       attempt_count, next_attempt_at, lease_until, last_error, created_at
+FROM market_listings
+WHERE process_state IN (`+strings.Join(ph, ",")+`)
+  AND next_attempt_at <= ?
+  AND (lease_until = 0 OR lease_until < ?)
+ORDER BY created_at ASC, ad_id ASC
+LIMIT ?`, args...)
+	if err != nil {
+		return nil, err
+	}
+	var out []models.Listing
+	for rows.Next() {
+		var l models.Listing
+		var status, state string
+		var nextAt, leaseAt, createdAt int64
+		if err := rows.Scan(&l.AdID, &l.Title, &l.Price, &l.Currency, &l.URL,
+			&l.Description, &l.Seller, &status, &state, &l.AttemptCount,
+			&nextAt, &leaseAt, &l.LastError, &createdAt); err != nil {
+			rows.Close()
+			return nil, err
+		}
+		l.Status = models.Status(status)
+		l.ProcessState = models.ProcessState(state)
+		l.NextAttemptAt = timeFromUnix(nextAt)
+		l.LeaseUntil = time.Unix(leaseUntil, 0)
+		l.CreatedAt = timeFromUnix(createdAt)
+		out = append(out, l)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	for _, l := range out {
+		if _, err := tx.ExecContext(ctx,
+			`UPDATE market_listings SET lease_until = ? WHERE ad_id = ?`,
+			leaseUntil, l.AdID); err != nil {
+			return nil, err
+		}
+	}
+	if err := tx.Commit(); err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (s *Store) MarkProcessState(ctx context.Context, adID int64, state models.ProcessState) error {
+	_, err := s.db.ExecContext(ctx,
+		`UPDATE market_listings SET status = ?, process_state = ?, lease_until = 0 WHERE ad_id = ?`,
+		string(state), string(state), adID)
+	return err
+}
+
+func (s *Store) RetryProcess(ctx context.Context, adID int64, state models.ProcessState, reason string) error {
+	var attempts int
+	if err := s.db.QueryRowContext(ctx, `SELECT attempt_count FROM market_listings WHERE ad_id = ?`, adID).Scan(&attempts); err != nil {
+		return err
+	}
+	attempts++
+	if attempts >= 6 {
+		return s.MarkDead(ctx, adID, reason)
+	}
+	next := time.Now().Add(retryDelay(attempts)).Unix()
+	_, err := s.db.ExecContext(ctx, `
+UPDATE market_listings
+SET status = ?, process_state = ?, attempt_count = ?, next_attempt_at = ?, lease_until = 0, last_error = ?
+WHERE ad_id = ?`,
+		string(state), string(state), attempts, next, truncateErr(reason), adID)
+	return err
+}
+
+func (s *Store) CompleteProcess(ctx context.Context, adID int64, st models.Status) error {
+	_, err := s.db.ExecContext(ctx, `
+UPDATE market_listings
+SET status = ?, process_state = ?, lease_until = 0, last_error = ''
+WHERE ad_id = ?`, string(st), string(models.ProcessDone), adID)
+	return err
+}
+
+func (s *Store) MarkDead(ctx context.Context, adID int64, reason string) error {
+	_, err := s.db.ExecContext(ctx, `
+UPDATE market_listings
+SET status = ?, process_state = ?, lease_until = 0, last_error = ?
+WHERE ad_id = ?`, string(models.StatusError), string(models.ProcessDead), truncateErr(reason), adID)
 	return err
 }
 
@@ -144,9 +362,27 @@ func (s *Store) UpdateDetails(ctx context.Context, adID int64, description, sell
 // SaveVerdict пишет вердикт Gemini (старый путь оценки).
 func (s *Store) SaveVerdict(ctx context.Context, adID int64, v models.Verdict, st models.Status) error {
 	_, err := s.db.ExecContext(ctx,
-		`UPDATE market_listings SET is_deal = ?, need_check = ?, model_found = ?, estimated_profit = ?, reason = ?, specs = ?, status = ? WHERE ad_id = ?`,
-		boolInt(v.IsDeal), boolInt(v.NeedCheck), boolInt(v.ModelFound), v.EstimatedProfit, v.Reason, v.Specs, string(st), adID)
+		`UPDATE market_listings SET is_deal = ?, need_check = ?, model_found = ?, estimated_profit = ?, reason = ?, specs = ?, status = ?, process_state = ?, lease_until = 0 WHERE ad_id = ?`,
+		boolInt(v.IsDeal), boolInt(v.NeedCheck), boolInt(v.ModelFound), v.EstimatedProfit, v.Reason, v.Specs, string(st), processStateForStatus(st), adID)
 	return err
+}
+
+func (s *Store) SaveVerdictAlertPending(ctx context.Context, adID int64, v models.Verdict, text, url string, finalStatus models.Status) error {
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	if _, err := tx.ExecContext(ctx,
+		`UPDATE market_listings SET is_deal = ?, need_check = ?, model_found = ?, estimated_profit = ?, reason = ?, specs = ?, status = ?, process_state = ?, lease_until = 0 WHERE ad_id = ?`,
+		boolInt(v.IsDeal), boolInt(v.NeedCheck), boolInt(v.ModelFound), v.EstimatedProfit, v.Reason, v.Specs,
+		string(models.ProcessAlertPending), string(models.ProcessAlertPending), adID); err != nil {
+		return err
+	}
+	if err := enqueueOutboxTx(ctx, tx, adID, "verdict", text, url, finalStatus); err != nil {
+		return err
+	}
+	return tx.Commit()
 }
 
 // FunnelVerdict — аудит детерминированного вердикта воронки (PLAN_v4 §4.4).
@@ -162,9 +398,27 @@ type FunnelVerdict struct {
 // SaveFunnelVerdict пишет вердикт воронки + статус лота.
 func (s *Store) SaveFunnelVerdict(ctx context.Context, adID int64, v FunnelVerdict, st models.Status) error {
 	_, err := s.db.ExecContext(ctx,
-		`UPDATE market_listings SET verdict_code = ?, deviation = ?, group_n = ?, alternatives = ?, reason = ?, specs = ?, status = ? WHERE ad_id = ?`,
-		v.Code, v.Deviation, v.GroupN, v.Alternatives, v.Reason, v.Specs, string(st), adID)
+		`UPDATE market_listings SET verdict_code = ?, deviation = ?, group_n = ?, alternatives = ?, reason = ?, specs = ?, status = ?, process_state = ?, lease_until = 0 WHERE ad_id = ?`,
+		v.Code, v.Deviation, v.GroupN, v.Alternatives, v.Reason, v.Specs, string(st), processStateForStatus(st), adID)
 	return err
+}
+
+func (s *Store) SaveFunnelAlertPending(ctx context.Context, adID int64, v FunnelVerdict, text, url string, finalStatus models.Status) error {
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	if _, err := tx.ExecContext(ctx,
+		`UPDATE market_listings SET verdict_code = ?, deviation = ?, group_n = ?, alternatives = ?, reason = ?, specs = ?, status = ?, process_state = ?, lease_until = 0 WHERE ad_id = ?`,
+		v.Code, v.Deviation, v.GroupN, v.Alternatives, v.Reason, v.Specs,
+		string(models.ProcessAlertPending), string(models.ProcessAlertPending), adID); err != nil {
+		return err
+	}
+	if err := enqueueOutboxTx(ctx, tx, adID, "funnel", text, url, finalStatus); err != nil {
+		return err
+	}
+	return tx.Commit()
 }
 
 // SaveFunnelAudit — только аудит, статус не трогается (теневой режим).
@@ -173,6 +427,130 @@ func (s *Store) SaveFunnelAudit(ctx context.Context, adID int64, v FunnelVerdict
 		`UPDATE market_listings SET verdict_code = ?, deviation = ?, group_n = ?, alternatives = ?, reason = ?, specs = ? WHERE ad_id = ?`,
 		v.Code, v.Deviation, v.GroupN, v.Alternatives, v.Reason, v.Specs, adID)
 	return err
+}
+
+type TelegramOutboxItem struct {
+	ID          int64
+	AdID        int64
+	Kind        string
+	Text        string
+	URL         string
+	FinalStatus models.Status
+	Attempts    int
+	CreatedAt   time.Time
+}
+
+func enqueueOutboxTx(ctx context.Context, tx *sql.Tx, adID int64, kind, text, url string, finalStatus models.Status) error {
+	if _, err := tx.ExecContext(ctx,
+		`DELETE FROM telegram_outbox WHERE ad_id = ? AND sent_at = 0`, adID); err != nil {
+		return err
+	}
+	_, err := tx.ExecContext(ctx, `
+INSERT INTO telegram_outbox (ad_id, kind, text, url, final_status, next_attempt_at, created_at)
+VALUES (?, ?, ?, ?, ?, 0, ?)`,
+		adID, kind, text, url, string(finalStatus), time.Now().Unix())
+	return err
+}
+
+func (s *Store) ClaimTelegramOutbox(ctx context.Context, limit int, lease time.Duration) ([]TelegramOutboxItem, error) {
+	if limit <= 0 {
+		return nil, nil
+	}
+	now := time.Now().Unix()
+	leaseUntil := time.Now().Add(lease).Unix()
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return nil, err
+	}
+	defer tx.Rollback()
+
+	rows, err := tx.QueryContext(ctx, `
+SELECT id, ad_id, kind, text, url, final_status, attempt_count, created_at
+FROM telegram_outbox
+WHERE sent_at = 0
+  AND next_attempt_at <= ?
+  AND (lease_until = 0 OR lease_until < ?)
+ORDER BY created_at ASC, id ASC
+LIMIT ?`, now, now, limit)
+	if err != nil {
+		return nil, err
+	}
+	var out []TelegramOutboxItem
+	for rows.Next() {
+		var it TelegramOutboxItem
+		var finalStatus string
+		var createdAt int64
+		if err := rows.Scan(&it.ID, &it.AdID, &it.Kind, &it.Text, &it.URL,
+			&finalStatus, &it.Attempts, &createdAt); err != nil {
+			rows.Close()
+			return nil, err
+		}
+		it.FinalStatus = models.Status(finalStatus)
+		it.CreatedAt = timeFromUnix(createdAt)
+		out = append(out, it)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	for _, it := range out {
+		if _, err := tx.ExecContext(ctx,
+			`UPDATE telegram_outbox SET lease_until = ? WHERE id = ?`,
+			leaseUntil, it.ID); err != nil {
+			return nil, err
+		}
+	}
+	if err := tx.Commit(); err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (s *Store) MarkTelegramOutboxSent(ctx context.Context, it TelegramOutboxItem, messageID int64) error {
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	now := time.Now().Unix()
+	if _, err := tx.ExecContext(ctx, `
+UPDATE telegram_outbox
+SET sent_at = ?, message_id = ?, lease_until = 0, last_error = ''
+WHERE id = ?`, now, messageID, it.ID); err != nil {
+		return err
+	}
+	if it.AdID != 0 && it.FinalStatus != "" {
+		if _, err := tx.ExecContext(ctx, `
+UPDATE market_listings
+SET status = ?, process_state = ?, lease_until = 0, last_error = ''
+WHERE ad_id = ?`, string(it.FinalStatus), string(models.ProcessDone), it.AdID); err != nil {
+			return err
+		}
+	}
+	return tx.Commit()
+}
+
+func (s *Store) RetryTelegramOutbox(ctx context.Context, id int64, reason string) error {
+	var attempts int
+	if err := s.db.QueryRowContext(ctx,
+		`SELECT attempt_count FROM telegram_outbox WHERE id = ?`, id).Scan(&attempts); err != nil {
+		return err
+	}
+	attempts++
+	next := time.Now().Add(retryDelay(attempts)).Unix()
+	_, err := s.db.ExecContext(ctx, `
+UPDATE telegram_outbox
+SET attempt_count = ?, next_attempt_at = ?, lease_until = 0, last_error = ?
+WHERE id = ?`, attempts, next, truncateErr(reason), id)
+	return err
+}
+
+func (s *Store) PendingTelegramOutbox(ctx context.Context) (int, error) {
+	var n int
+	err := s.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM telegram_outbox WHERE sent_at = 0`).Scan(&n)
+	return n, err
 }
 
 // VerdictRow — строка отчёта по вердиктам воронки (пульт «Алмазы»).
@@ -323,6 +701,48 @@ func (s *Store) Count(ctx context.Context) (int, error) {
 	var n int
 	err := s.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM market_listings`).Scan(&n)
 	return n, err
+}
+
+func processStateForStatus(st models.Status) string {
+	switch st {
+	case models.StatusError:
+		return string(models.ProcessDead)
+	default:
+		return string(models.ProcessDone)
+	}
+}
+
+func retryDelay(attempt int) time.Duration {
+	if attempt < 1 {
+		attempt = 1
+	}
+	if attempt > 6 {
+		attempt = 6
+	}
+	return time.Duration(1<<uint(attempt-1)) * time.Minute
+}
+
+func truncateErr(s string) string {
+	s = strings.TrimSpace(s)
+	r := []rune(s)
+	if len(r) <= 1000 {
+		return s
+	}
+	return string(r[:1000])
+}
+
+func unixOrZero(t time.Time) int64 {
+	if t.IsZero() {
+		return 0
+	}
+	return t.Unix()
+}
+
+func timeFromUnix(v int64) time.Time {
+	if v <= 0 {
+		return time.Time{}
+	}
+	return time.Unix(v, 0)
 }
 
 func boolInt(b bool) int {

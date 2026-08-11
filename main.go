@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"sync"
 	"sync/atomic"
 	"syscall"
@@ -50,10 +51,40 @@ func (s *botState) enterChallengePause(cfg *config.Config) {
 	s.beat.SetState("challenge_pause")
 }
 
+func acquireSingleton(path string) (func(), error) {
+	if dir := filepath.Dir(path); dir != "" && dir != "." {
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			return nil, err
+		}
+	}
+	f, err := os.OpenFile(path, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o644)
+	if err != nil {
+		return nil, err
+	}
+	_, _ = fmt.Fprintf(f, "%d\n%s\n", os.Getpid(), time.Now().Format(time.RFC3339))
+	if err := f.Close(); err != nil {
+		_ = os.Remove(path)
+		return nil, err
+	}
+	return func() { _ = os.Remove(path) }, nil
+}
+
+func durableQueueEnabled() bool { return true }
+
 func main() {
 	cfg := config.Load()
 	log := slog.New(slog.NewTextHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelInfo}))
 	slog.SetDefault(log)
+	if err := cfg.Validate(); err != nil {
+		log.Error("invalid config", "err", err)
+		os.Exit(2)
+	}
+	releaseLock, err := acquireSingleton(cfg.LockPath)
+	if err != nil {
+		log.Error("another kpbot instance is already running or lock is stale", "lock", cfg.LockPath, "err", err)
+		os.Exit(1)
+	}
+	defer releaseLock()
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -88,6 +119,7 @@ func main() {
 	evaluator := vision.NewEvaluator(gemini, cfg.GeminiConcurrency)
 	tg := notifier.NewWithQueue(cfg.TelegramToken, cfg.TelegramChatID, cfg.AlertQueuePath)
 	kp := collector.NewClient()
+	go telegramOutboxLoop(ctx, store, tg, log)
 
 	var csvExp *exporter.CSVExporter
 	if exp, err := exporter.NewCSV(cfg.CSVPath); err == nil {
@@ -350,6 +382,24 @@ func pollOnce(ctx context.Context, kp *collector.Client, store *storage.Store, c
 		if ctx.Err() != nil {
 			return
 		}
+		{
+			l := models.Listing{
+				AdID:         ad.AdID,
+				Title:        ad.Name,
+				Price:        float64(ad.Price),
+				Currency:     models.NormalizeCurrency(ad.Currency),
+				URL:          ad.URL(),
+				Status:       models.Status(models.ProcessDetailPending),
+				ProcessState: models.ProcessDetailPending,
+				CreatedAt:    time.Now(),
+			}
+			if err := store.UpsertDiscovered(ctx, l); err != nil {
+				log.Error("durable queue: discover", "ad_id", ad.AdID, "err", err)
+			}
+		}
+		if durableQueueEnabled() {
+			continue
+		}
 		exists, err := store.Exists(ctx, ad.AdID)
 		if err != nil {
 			log.Error("проверка дубля", "ad_id", ad.AdID, "err", err)
@@ -476,6 +526,154 @@ func pollOnce(ctx context.Context, kp *collector.Client, store *storage.Store, c
 		case jobs <- evalJob{listing: l, detail: detail, hint: hint}:
 		default:
 			log.Warn("очередь оценки переполнена — лот пропущен", "ad_id", ad.AdID)
+		}
+	}
+	processDueListings(ctx, kp, store, cfg, log, st, fnl, gem, tg)
+}
+
+func processDueListings(ctx context.Context, kp *collector.Client, store *storage.Store, cfg *config.Config, log *slog.Logger, st *botState, fnl *funnel.Funnel, gem *vision.GeminiClient, tg *notifier.Telegram) {
+	for {
+		batch, err := store.ClaimDueListings(ctx, []models.ProcessState{
+			models.ProcessDetailPending,
+			models.ProcessEvaluating,
+		}, 16, 15*time.Minute)
+		if err != nil {
+			log.Error("durable queue: claim", "err", err)
+			return
+		}
+		if len(batch) == 0 {
+			return
+		}
+		for _, l := range batch {
+			if ctx.Err() != nil {
+				return
+			}
+			if banned, hit := filters.IsBannedModel(l.Title, cfg.BannedModels); banned {
+				log.Info("ban-list title", "ad_id", l.AdID, "marker", hit)
+				_ = store.CompleteProcess(ctx, l.AdID, models.StatusSkippedBan)
+				continue
+			}
+			if spam, reason := collector.IsSpam(l.Title, ""); spam {
+				log.Info("spam title", "ad_id", l.AdID, "reason", reason)
+				_ = store.CompleteProcess(ctx, l.AdID, models.StatusSkippedSpam)
+				continue
+			}
+
+			select {
+			case <-ctx.Done():
+				return
+			case <-time.After(cfg.FetchDelay):
+			}
+
+			detail, err := kp.FetchDetail(ctx, l.AdID)
+			if err != nil {
+				switch {
+				case errors.Is(err, collector.ErrRateLimited):
+					_ = store.RetryProcess(ctx, l.AdID, models.ProcessDetailPending, err.Error())
+					log.Warn("429 on details: retry scheduled", "ad_id", l.AdID)
+					return
+				case errors.Is(err, collector.ErrChallenge):
+					_ = store.RetryProcess(ctx, l.AdID, models.ProcessDetailPending, err.Error())
+					st.enterChallengePause(cfg)
+					log.Warn("KP challenge on details: retry scheduled and pause entered", "ad_id", l.AdID, "pause", cfg.ChallengePause.String())
+					return
+				case errors.Is(err, collector.ErrNotFound):
+					_ = store.MarkDead(ctx, l.AdID, err.Error())
+					continue
+				default:
+					if ctx.Err() == nil {
+						log.Error("details", "ad_id", l.AdID, "err", err)
+					}
+					_ = store.RetryProcess(ctx, l.AdID, models.ProcessDetailPending, err.Error())
+					continue
+				}
+			}
+			if detail.Description == "" && detail.Seller() == "" {
+				reason := "empty /eds response"
+				log.Warn(reason, "ad_id", l.AdID)
+				_ = store.RetryProcess(ctx, l.AdID, models.ProcessDetailPending, reason)
+				continue
+			}
+
+			price := l.Price
+			cur := models.NormalizeCurrency(l.Currency)
+			if detail.Price > 0 {
+				price = float64(detail.Price)
+				cur = models.NormalizeCurrency(detail.Currency)
+			}
+			if err := store.UpdateDetails(ctx, l.AdID, detail.Description, detail.Seller(), price, cur); err != nil {
+				log.Error("details update", "ad_id", l.AdID, "err", err)
+				_ = store.RetryProcess(ctx, l.AdID, models.ProcessDetailPending, err.Error())
+				continue
+			}
+			if spam, reason := collector.IsSpam(l.Title, detail.Seller()); spam {
+				log.Info("spam seller", "ad_id", l.AdID, "reason", reason)
+				_ = store.CompleteProcess(ctx, l.AdID, models.StatusSkippedSpam)
+				continue
+			}
+
+			adURL := detail.AdURL
+			if adURL == "" {
+				adURL = l.URL
+			}
+			ad := models.SearchAd{
+				AdID: l.AdID, Name: l.Title, Price: models.FlexFloat(price), Currency: cur,
+				AdURL: adURL, Condition: detail.Condition, KPIzlog: detail.KPIzlog,
+			}
+			_ = store.MarkProcessState(ctx, l.AdID, models.ProcessEvaluating)
+			out := funnel.Run(ctx, fnl, cfg, gem, log, ad, detail)
+			if out.AlertText != "" {
+				if err := store.SaveFunnelAlertPending(ctx, l.AdID, out.Audit, out.AlertText, out.AlertURL, out.Status); err != nil {
+					log.Error("funnel alert outbox", "ad_id", l.AdID, "err", err)
+					_ = store.RetryProcess(ctx, l.AdID, models.ProcessEvaluating, err.Error())
+					continue
+				}
+				drainTelegramOutbox(ctx, store, tg, log, 8)
+			} else if err := store.SaveFunnelVerdict(ctx, l.AdID, out.Audit, out.Status); err != nil {
+				log.Error("funnel verdict", "ad_id", l.AdID, "err", err)
+				_ = store.RetryProcess(ctx, l.AdID, models.ProcessEvaluating, err.Error())
+			} else {
+				log.Info("funnel: quiet outcome", "ad_id", l.AdID, "code", out.Code)
+			}
+		}
+	}
+}
+
+func drainTelegramOutbox(ctx context.Context, store *storage.Store, tg *notifier.Telegram, log *slog.Logger, limit int) {
+	items, err := store.ClaimTelegramOutbox(ctx, limit, 2*time.Minute)
+	if err != nil {
+		log.Error("telegram outbox: claim", "err", err)
+		return
+	}
+	for _, it := range items {
+		if ctx.Err() != nil {
+			return
+		}
+		messageID, err := tg.SendRawDirect(ctx, it.Text, it.URL)
+		if err != nil {
+			log.Error("telegram outbox: send", "id", it.ID, "ad_id", it.AdID, "err", err)
+			_ = store.RetryTelegramOutbox(ctx, it.ID, err.Error())
+			continue
+		}
+		if err := store.MarkTelegramOutboxSent(ctx, it, messageID); err != nil {
+			log.Error("telegram outbox: mark sent", "id", it.ID, "ad_id", it.AdID, "err", err)
+			_ = store.RetryTelegramOutbox(ctx, it.ID, err.Error())
+			continue
+		}
+		log.Info("telegram outbox: sent", "id", it.ID, "ad_id", it.AdID, "status", it.FinalStatus)
+	}
+}
+
+func telegramOutboxLoop(ctx context.Context, store *storage.Store, tg *notifier.Telegram, log *slog.Logger) {
+	drainTelegramOutbox(ctx, store, tg, log, 20)
+	ticker := time.NewTicker(30 * time.Second)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			drainTelegramOutbox(ctx, store, tg, log, 20)
 		}
 	}
 }

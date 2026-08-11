@@ -72,6 +72,10 @@ func lenovoMTM(text string) string {
 	return ""
 }
 
+func ExtractExactModelCode(text string) string {
+	return lenovoMTM(text)
+}
+
 var (
 	// все вхождения «NNGB»/«NNG» с позициями — классифицируются по контексту
 	gbRe          = regexp.MustCompile(`(?i)\b(\d{1,4})\s*gb?\b`)

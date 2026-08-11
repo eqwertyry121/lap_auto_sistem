@@ -380,24 +380,24 @@ func TestEvaluateSeparatesComparableMedianAndOpportunityCeiling(t *testing.T) {
 	}
 
 	est := m.EstimateFor(target)
-	if est.Capped() {
+	if !est.Capped() {
 		t.Fatalf("ожидал конкурентный потолок, получил %+v", est)
 	}
-	if est.RawMedian != 250 || est.Median != 250 {
+	if est.RawMedian != 250 || est.Median != 110 {
 		t.Fatalf("оценка = raw %.0f / median %.0f, жду 250 / 110", est.RawMedian, est.Median)
 	}
-	if est.CapLot != nil {
+	if est.CapLot == nil || est.CapLot.AdID != 51 {
 		t.Fatalf("потолок должен поставить частный более мощный лот 51, got %+v", est.CapLot)
 	}
 
 	dev, ok := m.Deviation(target)
-	want := 100.0/250.0 - 1
+	want := 100.0/110.0 - 1
 	if !ok || math.Abs(dev-want) > 1e-9 {
 		t.Fatalf("dev=%.4f ok=%v, жду %.4f", dev, ok, want)
 	}
 }
 
-func TestOpportunityCeilingDoesNotImplyDominance(t *testing.T) {
+func TestValueOutclassingDoesNotNeedClosePriceBand(t *testing.T) {
 	var lots []Lot
 	for i := 0; i < 8; i++ {
 		lots = append(lots, mkLot(int64(i+1), "i5-old", 3000, 8, 256, 250, 1))
@@ -414,8 +414,8 @@ func TestOpportunityCeilingDoesNotImplyDominance(t *testing.T) {
 	if ev.OpportunityBy == nil || ev.OpportunityBy.AdID != 51 {
 		t.Fatalf("OpportunityBy = %+v, want lot 51", ev.OpportunityBy)
 	}
-	if ev.DominatedBy != nil {
-		t.Fatalf("DominatedBy = %+v, want nil because stronger lot is outside +10%%/+20€", ev.DominatedBy)
+	if ev.DominatedBy == nil || ev.DominatedBy.AdID != 51 {
+		t.Fatalf("DominatedBy = %+v, want value-outclassing lot 51", ev.DominatedBy)
 	}
 }
 

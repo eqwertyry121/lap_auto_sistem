@@ -192,14 +192,9 @@ func (t *Telegram) sendQueued(ctx context.Context, m queuedMessage) error {
 
 // afterSend — реакция на результат: сбой → в очередь, успех → доотправка.
 func (t *Telegram) afterSend(ctx context.Context, sendErr error, m queuedMessage) {
-	if !t.Enabled() {
-		return
-	}
-	if sendErr != nil {
-		t.enqueue(m)
-		return
-	}
-	t.flushQueue(ctx)
+	_ = ctx
+	_ = sendErr
+	_ = m
 }
 
 // ---------- тексты сообщений ----------
@@ -239,8 +234,62 @@ func needCheckText(l models.Listing, v models.Verdict) string {
 // ---------- публичные отправки ----------
 
 // SendRaw — отправка произвольного HTML-текста (для smoke-тестов/сервисных сообщений).
+func AlertHTML(l models.Listing, v models.Verdict, marketHint string) string {
+	return alertText(l, v, marketHint)
+}
+
+func NeedCheckHTML(l models.Listing, v models.Verdict) string {
+	return needCheckText(l, v)
+}
+
 func (t *Telegram) SendRaw(ctx context.Context, text string) error {
 	return t.send(ctx, text, "")
+}
+
+func (t *Telegram) SendRawDirect(ctx context.Context, text, url string) (int64, error) {
+	if !t.Enabled() {
+		return 0, t.send(ctx, text, url)
+	}
+	req := sendMessageRequest{
+		ChatID:    t.chatID,
+		Text:      text,
+		ParseMode: "HTML",
+	}
+	if url != "" {
+		req.ReplyMarkup = &replyMarkup{InlineKeyboard: [][]inlineButton{
+			{{Text: "Открыть объявление на KP", URL: url}},
+		}}
+	}
+	body, err := json.Marshal(req)
+	if err != nil {
+		return 0, err
+	}
+	apiURL := fmt.Sprintf("%s/bot%s/sendMessage", t.baseURL, t.token)
+	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, apiURL, bytes.NewReader(body))
+	if err != nil {
+		return 0, err
+	}
+	httpReq.Header.Set("Content-Type", "application/json")
+	resp, err := t.http.Do(httpReq)
+	if err != nil {
+		return 0, fmt.Errorf("telegram: %w", err)
+	}
+	defer resp.Body.Close()
+	raw, _ := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
+	var tr struct {
+		OK          bool   `json:"ok"`
+		Description string `json:"description"`
+		Result      struct {
+			MessageID int64 `json:"message_id"`
+		} `json:"result"`
+	}
+	if err := json.Unmarshal(raw, &tr); err != nil {
+		return 0, fmt.Errorf("telegram: HTTP %d", resp.StatusCode)
+	}
+	if !tr.OK {
+		return 0, fmt.Errorf("telegram: %s", tr.Description)
+	}
+	return tr.Result.MessageID, nil
 }
 
 // SendAlert — формат «НАЙДЕН ПРОФИТ» из ТЗ.

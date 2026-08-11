@@ -42,6 +42,15 @@ func TestExtractLaptopModel(t *testing.T) {
 	}
 }
 
+func TestExtractExactModelCode(t *testing.T) {
+	if got := ExtractExactModelCode("Lenovo ThinkPad E14 Gen 6 21M3003PCX"); got != "21M3003PCX" {
+		t.Fatalf("ExtractExactModelCode = %q, want 21M3003PCX", got)
+	}
+	if got := ExtractExactModelCode("Lenovo ThinkPad E14 Gen 6"); got != "" {
+		t.Fatalf("family-only model must not be exact code, got %q", got)
+	}
+}
+
 func TestExtractGPU(t *testing.T) {
 	cases := []struct{ text, want string }{
 		{"Acer Predator Helios Neo 16 i7-13700HX/32GB DDR5/1TB/RTX4060", "RTX 4060"},

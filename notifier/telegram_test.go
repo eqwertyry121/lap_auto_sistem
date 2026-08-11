@@ -6,7 +6,6 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
-	"strings"
 	"sync/atomic"
 	"testing"
 
@@ -19,12 +18,27 @@ func fakeTG(t *testing.T, ok *atomic.Bool) *httptest.Server {
 	return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		if ok.Load() {
-			_, _ = w.Write([]byte(`{"ok":true}`))
+			_, _ = w.Write([]byte(`{"ok":true,"result":{"message_id":77}}`))
 		} else {
 			w.WriteHeader(http.StatusTooManyRequests)
 			_, _ = w.Write([]byte(`{"ok":false,"description":"flood"}`))
 		}
 	}))
+}
+
+func TestSendRawDirectReturnsMessageID(t *testing.T) {
+	var ok atomic.Bool
+	ok.Store(true)
+	srv := fakeTG(t, &ok)
+	defer srv.Close()
+	tg := newTestTG(t, srv)
+	id, err := tg.SendRawDirect(context.Background(), "<b>test</b>", "https://kp/x")
+	if err != nil {
+		t.Fatalf("send raw direct: %v", err)
+	}
+	if id != 77 {
+		t.Fatalf("message id = %d, want 77", id)
+	}
 }
 
 func newTestTG(t *testing.T, srv *httptest.Server) *Telegram {
@@ -38,7 +52,7 @@ func newTestTG(t *testing.T, srv *httptest.Server) *Telegram {
 	}
 }
 
-func TestAlertQueueAndFlush(t *testing.T) {
+func TestSendFailureDoesNotCreateFileQueue(t *testing.T) {
 	var ok atomic.Bool
 	srv := fakeTG(t, &ok)
 	defer srv.Close()
@@ -48,23 +62,12 @@ func TestAlertQueueAndFlush(t *testing.T) {
 	l := models.Listing{AdID: 1, Title: "Laptop", Price: 240, Currency: "EUR", URL: "https://kp/x"}
 	v := models.Verdict{IsDeal: true, EstimatedProfit: 60, Reason: "test", Specs: "i5"}
 
-	// 1) Telegram «лежит» → алерт становится в очередь.
 	ok.Store(false)
 	if err := tg.SendAlert(ctx, l, v, "hint"); err == nil {
 		t.Fatal("ждал ошибку отправки")
 	}
-	data, err := os.ReadFile(tg.queuePath)
-	if err != nil || !strings.Contains(string(data), `"type":"alert"`) {
-		t.Fatalf("очередь не создана: %v / %q", err, data)
-	}
-
-	// 2) Telegram ожил → новый алерт проходит, очередь доотправляется и чистится.
-	ok.Store(true)
-	if err := tg.SendNeedCheck(ctx, l, v); err != nil {
-		t.Fatalf("повторная отправка: %v", err)
-	}
 	if _, err := os.Stat(tg.queuePath); !os.IsNotExist(err) {
-		t.Fatalf("очередь не рассосалась после успешной отправки: err=%v", err)
+		t.Fatalf("file queue must not be created anymore: err=%v", err)
 	}
 }
 

@@ -499,7 +499,7 @@ type PriceEstimate struct {
 
 // EstimateFor — рыночная цена конфигурации лота.
 func (m *Market) EstimateFor(l Lot) PriceEstimate {
-	return m.estimateFor(l, false)
+	return m.withCompetitiveCap(l, m.estimateFor(l, false))
 }
 
 func (e PriceEstimate) Capped() bool {
@@ -521,11 +521,12 @@ type MarketEvaluation struct {
 }
 
 func (m *Market) Evaluate(l Lot) MarketEvaluation {
-	est := m.estimateFor(l, true)
+	raw := m.estimateFor(l, true)
+	est := m.withCompetitiveCap(l, raw)
 	ev := MarketEvaluation{
 		Estimate:         est,
-		ComparableMedian: est.Median,
-		ComparableP25:    est.P25,
+		ComparableMedian: raw.Median,
+		ComparableP25:    raw.P25,
 		Confidence:       confidenceFor(est),
 	}
 	if est.Median > 0 {
@@ -614,6 +615,12 @@ func pricesExcluding(items []groupPrice, adID int64) []float64 {
 
 const competitiveCapStrongerPct = 0.20
 
+const (
+	stepUpPowerGainMinMarket  = 0.50
+	stepUpValueRatioMinMarket = 1.25
+	maxMarginalEURPer1000     = 2.0
+)
+
 func (m *Market) marketWindowDays() int {
 	if m.medianWindowDays > 0 {
 		return m.medianWindowDays
@@ -639,11 +646,9 @@ func (m *Market) withCompetitiveCap(target Lot, est PriceEstimate) PriceEstimate
 }
 
 func (m *Market) competitiveCapLot(target Lot, maxPrice float64) (Lot, bool) {
-	targetScore := target.Composite()
-	if targetScore <= 0 || maxPrice <= 0 {
+	if target.Composite() <= 0 || maxPrice <= 0 {
 		return Lot{}, false
 	}
-	minScore := targetScore * (1 + competitiveCapStrongerPct)
 	var (
 		best Lot
 		ok   bool
@@ -652,7 +657,7 @@ func (m *Market) competitiveCapLot(target Lot, maxPrice float64) (Lot, bool) {
 		if l.AdID == target.AdID || l.Price <= 0 || l.Price >= maxPrice {
 			continue
 		}
-		if l.Composite() < minScore {
+		if !outclassesValue(target, l) {
 			continue
 		}
 		if !ok || l.Price < best.Price || (l.Price == best.Price && l.Composite() > best.Composite()) {
@@ -672,28 +677,55 @@ func (m *Market) competitiveCapLot(target Lot, maxPrice float64) (Lot, bool) {
 // понижается по иерархии. Для лотов вне датасета (живой бот) медиана
 // берётся целиком. NaN-защита: без оценки возвращает 0 и false.
 func (m *Market) dominanceLot(target Lot) (Lot, bool) {
-	targetScore := target.Composite()
-	if targetScore <= 0 || target.Price <= 0 {
+	if target.Composite() <= 0 || target.Price <= 0 {
 		return Lot{}, false
 	}
-	maxPrice := math.Max(target.Price*1.10, target.Price+20)
-	minScore := targetScore * (1 + competitiveCapStrongerPct)
 	var (
 		best Lot
 		ok   bool
 	)
 	for _, l := range m.candidates(m.marketWindowDays()) {
-		if l.AdID == target.AdID || l.Price <= 0 || l.Price > maxPrice {
+		if l.AdID == target.AdID || l.Price <= 0 {
 			continue
 		}
-		if l.Composite() < minScore {
+		if !outclassesValue(target, l) {
 			continue
 		}
-		if !ok || l.Price < best.Price || (l.Price == best.Price && l.Composite() > best.Composite()) {
+		if !ok || l.Price < best.Price || (l.Price == best.Price && l.ValuePer1000() > best.ValuePer1000()) {
 			best, ok = l, true
 		}
 	}
 	return best, ok
+}
+
+func outclassesValue(target, candidate Lot) bool {
+	if target.Price <= 0 || candidate.Price <= 0 {
+		return false
+	}
+	if candidate.CPUScore <= 0 || target.CPUScore <= 0 || candidate.CPUScore < target.CPUScore {
+		return false
+	}
+	if target.GPUScore > 0 && candidate.GPUScore < target.GPUScore {
+		return false
+	}
+	if target.RAMGB > 0 && candidate.RAMGB < target.RAMGB {
+		return false
+	}
+	if target.SSDGB > 0 && candidate.SSDGB < target.SSDGB {
+		return false
+	}
+	targetComp := target.Composite()
+	candComp := candidate.Composite()
+	if targetComp <= 0 || candComp <= targetComp {
+		return false
+	}
+	powerGain := (candComp - targetComp) / targetComp
+	valueRatio := candidate.ValuePer1000() / target.ValuePer1000()
+	marginalEURPer1000 := (candidate.Price - target.Price) / ((candComp - targetComp) / 1000)
+	if candidate.Price <= target.Price {
+		return powerGain >= competitiveCapStrongerPct
+	}
+	return powerGain >= stepUpPowerGainMinMarket && (valueRatio >= stepUpValueRatioMinMarket || marginalEURPer1000 <= maxMarginalEURPer1000)
 }
 
 func (m *Market) Deviation(l Lot) (float64, bool) {

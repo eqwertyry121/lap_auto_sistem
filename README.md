@@ -77,14 +77,17 @@ go run .
 | `DB_PATH` | `data/kp_bot.db` | файл SQLite (SSOT) |
 | `FETCH_DELAY_MS` | `700` | пауза между запросами `/eds/{id}` |
 | `GEMINI_API_KEY` | — | **обязателен** для оценки |
-| `GEMINI_MODEL` | `gemini-2.5-flash` | модель Gemini |
+| `GEMINI_MODEL` | `gemini-2.5-flash-lite` | базовая модель Gemini |
+| `GEMINI_LITE_MODEL` | `gemini-2.5-flash-lite` | лёгкая модель для text/vision/search-ступеней |
 | `GEMINI_CONCURRENCY` | `5` | лимит параллельных оценок (worker pool) |
+| `GEMINI_DAILY_LIMIT` | `80` | дневной лимит вызовов Gemini; `0` явно снимает лимит |
 | `TELEGRAM_BOT_TOKEN` | — | токен бота (`@BotFather`) |
 | `TELEGRAM_CHAT_ID` | — | id чата/канала для алертов |
 | `CSV_PATH` | `data/market_history.csv` | файл CSV-экспорта рыночной базы |
 | `EXPORT_INTERVAL_MIN` | `30` | период батч-экспорта |
 | `PRICE_CACHE_REFRESH_MIN` | `30` | период обновления кэша цен |
 | `PRICE_CACHE_DAYS` | `90` | окно истории для кэша цен |
+| `LOCK_PATH` | `data/kpbot.lock` | singleton-lock, чтобы не запустить два экземпляра бота |
 
 Если `TELEGRAM_*` не заданы — алерты печатаются в консоль (dry-run).
 CSV-экспорт работает всегда и не требует настройки (путь — `CSV_PATH`).
@@ -133,6 +136,10 @@ CSV-экспорт работает всегда и не требует наст
 ### Хранение
 SQLite выбран для MVP, чтобы бот работал «из коробки». Запросы написаны так, чтобы
 переезд на PostgreSQL свёлся к смене драйвера и плейсхолдеров в `storage/db.go`.
+Живые объявления обрабатываются через durable state machine в `market_listings`
+(`DETAIL_PENDING` → `EVALUATING` → `ALERT_PENDING` → `DONE/DEAD`), а Telegram
+алерты доставляются через транзакционный `telegram_outbox`. Статус `ALERTED`
+ставится только после успешной отправки.
 
 ---
 

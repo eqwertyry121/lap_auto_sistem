@@ -29,15 +29,19 @@ func (m *Market) CheaperSameCPU(target Lot, windowDays, limit int) []Lot {
 // 1.1 = «≤ +10%» для алерта-альтернатив).
 func (m *Market) StrongerForBudget(target Lot, windowDays, limit int, priceCapRatio float64) []Lot {
 	var out []Lot
+	targetComp := target.Composite()
+	if targetComp <= 0 {
+		return nil
+	}
 	for _, l := range m.candidates(windowDays) {
-		if l.AdID == target.AdID || l.CPUScore <= 0 {
+		if l.AdID == target.AdID || l.Composite() <= 0 {
 			continue
 		}
-		if l.CPUScore >= target.CPUScore*1.2 && l.Price <= target.Price*priceCapRatio {
+		if l.Composite() >= targetComp*1.2 && l.Price <= target.Price*priceCapRatio {
 			out = append(out, l)
 		}
 	}
-	sort.Slice(out, func(i, j int) bool { return out[i].CPUScore > out[j].CPUScore })
+	sort.Slice(out, func(i, j int) bool { return out[i].Composite() > out[j].Composite() })
 	return cut(out, limit)
 }
 

@@ -1,6 +1,7 @@
 package config
 
 import (
+	"fmt"
 	"os"
 	"strconv"
 	"strings"
@@ -34,8 +35,9 @@ type Config struct {
 	// Фаза 0 (PLAN_v4): надёжность и наблюдаемость.
 	ChallengePause time.Duration // пауза при антибот-челлендже KP на поиске
 	HeartbeatPath  string        // файл живости для watchdog
-	DigestAt       string        // время дневного дайджеста, «HH:MM»
-	ResearchDBPath string        // датасет рынка (read-only для дайджеста)
+	LockPath       string
+	DigestAt       string // время дневного дайджеста, «HH:MM»
+	ResearchDBPath string // датасет рынка (read-only для дайджеста)
 
 	// Фаза 6 (PLAN_v4): автономность.
 	AlertQueuePath string // JSONL-очередь алертов на сбой Telegram
@@ -76,7 +78,7 @@ func Load() *Config {
 		GeminiVisionModel: envStr("GEMINI_VISION_MODEL", liteGeminiModel),
 		GeminiSearchModel: envStr("GEMINI_SEARCH_MODEL", liteGeminiModel),
 		GeminiConcurrency: envInt("GEMINI_CONCURRENCY", 5),
-		GeminiDailyLimit:  envInt("GEMINI_DAILY_LIMIT", 0),
+		GeminiDailyLimit:  envInt("GEMINI_DAILY_LIMIT", 80),
 		TelegramToken:     os.Getenv("TELEGRAM_BOT_TOKEN"),
 		TelegramChatID:    os.Getenv("TELEGRAM_CHAT_ID"),
 		CSVPath:           envStr("CSV_PATH", "data/market_history.csv"),
@@ -86,6 +88,7 @@ func Load() *Config {
 
 		ChallengePause: envDurationMin("CHALLENGE_PAUSE_MIN", 30),
 		HeartbeatPath:  envStr("HEARTBEAT_PATH", "data/kpbot.heartbeat"),
+		LockPath:       envStr("LOCK_PATH", "data/kpbot.lock"),
 		DigestAt:       envStr("DIGEST_AT", "09:00"),
 		ResearchDBPath: envStr("RESEARCH_DB_PATH", "data/research.db"),
 
@@ -106,6 +109,61 @@ func Load() *Config {
 		RequireDGPU:  envStr("REQUIRE_DGPU", "1") == "1",
 		MarketTolPct: envInt("MARKET_TOL_PCT", 5),
 	}
+}
+
+func (c *Config) Validate() error {
+	checkDuration := func(name string, v time.Duration) error {
+		if v <= 0 {
+			return fmt.Errorf("%s must be positive", name)
+		}
+		return nil
+	}
+	for _, item := range []struct {
+		name string
+		v    time.Duration
+	}{
+		{"POLL_INTERVAL_SEC", c.PollInterval},
+		{"FETCH_DELAY_MS", c.FetchDelay},
+		{"EXPORT_INTERVAL_MIN", c.ExportInterval},
+		{"PRICE_CACHE_REFRESH_MIN", c.PriceCacheRefresh},
+		{"CHALLENGE_PAUSE_MIN", c.ChallengePause},
+		{"MARKET_REFRESH_MIN", c.MarketRefresh},
+	} {
+		if err := checkDuration(item.name, item.v); err != nil {
+			return err
+		}
+	}
+	if c.GeminiConcurrency <= 0 || c.GeminiConcurrency > 20 {
+		return fmt.Errorf("GEMINI_CONCURRENCY must be in 1..20")
+	}
+	if c.GeminiDailyLimit < 0 {
+		return fmt.Errorf("GEMINI_DAILY_LIMIT must be >= 0")
+	}
+	if c.PriceCacheDays <= 0 {
+		return fmt.Errorf("PRICE_CACHE_DAYS must be positive")
+	}
+	if c.DiamondMinN <= 0 {
+		return fmt.Errorf("DIAMOND_MIN_N must be positive")
+	}
+	if c.SuspectDevPct >= c.DiamondDevPct {
+		return fmt.Errorf("SUSPECT_DEV_PCT must be lower than DIAMOND_DEV_PCT")
+	}
+	if c.MarketTolPct < 0 || c.MarketTolPct > 100 {
+		return fmt.Errorf("MARKET_TOL_PCT must be in 0..100")
+	}
+	if _, err := time.Parse("15:04", c.DigestAt); err != nil {
+		return fmt.Errorf("DIGEST_AT must be HH:MM: %w", err)
+	}
+	if (c.TelegramToken == "") != (c.TelegramChatID == "") {
+		return fmt.Errorf("TELEGRAM_BOT_TOKEN and TELEGRAM_CHAT_ID must be set together")
+	}
+	if strings.TrimSpace(c.DBPath) == "" || strings.TrimSpace(c.ResearchDBPath) == "" {
+		return fmt.Errorf("DB_PATH and RESEARCH_DB_PATH must be non-empty")
+	}
+	if strings.TrimSpace(c.LockPath) == "" {
+		return fmt.Errorf("LOCK_PATH must be non-empty")
+	}
+	return nil
 }
 
 func envStr(key, def string) string {

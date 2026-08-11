@@ -39,6 +39,7 @@ const (
 	vcSanity     = "SANITY"
 	vcNoMarket   = "NO_MARKET"
 	vcOutclassed = "OUTCLASSED"
+	vcSuppressed = "DIAMOND_SUPPRESSED"
 	vcBanMac     = "BAN_MAC"        // PLAN_v5: запрещённая линейка (MacBook)
 	vcNoGpu      = "NO_GPU"         // PLAN_v5: нет дискретной видеокарты
 	vcMoose      = "RARE_NO_MARKET" // железо добыто, но в данных KP не с чем сравнить
@@ -217,21 +218,32 @@ func stepUpOutclasses(target pricing.Lot, step *pricing.Lot) bool {
 		return false
 	}
 	dPrice := step.Price - target.Price
-	maxClosePrice := target.Price * stepUpClosePricePct
-	if maxClosePrice < stepUpClosePriceAbsEUR {
-		maxClosePrice = stepUpClosePriceAbsEUR
-	}
-	if dPrice > maxClosePrice {
-		return false
-	}
 	powerGain := (stepComp - targetComp) / targetComp
 	valueRatio := step.ValuePer1000() / target.ValuePer1000()
-	return powerGain >= stepUpPowerGainMin || valueRatio >= stepUpValueRatioMin
+	marginalEURPer1000 := dPrice / ((stepComp - targetComp) / 1000)
+	return powerGain >= stepUpPowerGainMin && (valueRatio >= stepUpValueRatioMin || marginalEURPer1000 <= 2)
 }
 
 // ---------- полный прогон лота ----------
 
 // Outcome — результат прогона для вызывающего кода.
+func diamondSuppressionReason(est pricing.PriceEstimate, gpuScore float64, condition string, sellerFound bool) string {
+	var reasons []string
+	if est.Level == "K3" {
+		reasons = append(reasons, "K3/OLS price estimate")
+	}
+	if gpuScore <= 0 {
+		reasons = append(reasons, "unknown GPU score")
+	}
+	if strings.TrimSpace(condition) == "" {
+		reasons = append(reasons, "unknown condition")
+	}
+	if !sellerFound {
+		reasons = append(reasons, "unknown seller type")
+	}
+	return strings.Join(reasons, "; ")
+}
+
 type Outcome struct {
 	Code      string
 	Status    models.Status
@@ -397,7 +409,8 @@ func Run(ctx context.Context, f *Funnel, cfg *config.Config, gem *vision.GeminiC
 	}
 	searchedModelThisRun := false
 	researchModelSpecs := func() {
-		if !cfg.WebResearch || laptopModel == "" || !missing() || cachedSearch || searchedModelThisRun {
+		exactCode := specs.ExtractExactModelCode(ad.Name + " " + descPlain + " " + laptopModel)
+		if !cfg.WebResearch || laptopModel == "" || exactCode == "" || !missing() || cachedSearch || searchedModelThisRun {
 			return
 		}
 		searchedModelThisRun = true
@@ -601,6 +614,15 @@ func Run(ctx context.Context, f *Funnel, cfg *config.Config, gem *vision.GeminiC
 	tr.f("L5: вердикт %s (рынок ≤ +%d%%, алмаз ≤ %d%%, подозрение < %d%%, мин. n=%d)",
 		code, cfg.MarketTolPct, cfg.DiamondDevPct, cfg.SuspectDevPct, cfg.DiamondMinN)
 
+	diamondSuppressedReason := ""
+	if code == vcDiamond || code == vcSuspect {
+		diamondSuppressedReason = diamondSuppressionReason(est, gpuScore, detail.Condition, seller.Found)
+		if diamondSuppressedReason != "" {
+			code = vcSuppressed
+			tr.f("L5 anti-diamond: suppressed because %s", diamondSuppressedReason)
+		}
+	}
+
 	alts := collectAlternatives(market, lot)
 	altsJSON, _ := json.Marshal(alts)
 	marketRef := "в данных KP нет группы для сравнения"
@@ -629,6 +651,9 @@ func Run(ctx context.Context, f *Funnel, cfg *config.Config, gem *vision.GeminiC
 	}
 	if outclassReason != "" {
 		marketRef += "; " + outclassReason
+	}
+	if diamondSuppressedReason != "" {
+		marketRef += "; diamond_suppressed=" + diamondSuppressedReason
 	}
 	audit := storage.FunnelVerdict{
 		Code: code, Deviation: dev, GroupN: est.N, Alternatives: string(altsJSON),

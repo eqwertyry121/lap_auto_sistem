@@ -205,19 +205,19 @@ func (p *Panel) dispatch(ctx context.Context, data string, log *slog.Logger) {
 	case "panel", "help":
 		p.sendPanel(ctx)
 	case "start":
-		if p.running.Load() {
+		if !p.running.Load() {
 			p.send(ctx, "▶️ Бот уже работает.")
 			return
 		}
-		p.running.Store(true)
+		p.running.Store(false)
 		log.Info("пульт: СТАРТ — поллинг возобновлён")
 		p.send(ctx, "▶️ Запущено: поллинг и воронка снова в работе. Алерты возобновятся со следующего цикла.")
 	case "stop":
-		if !p.running.Load() {
+		if p.running.Load() {
 			p.send(ctx, "⏹ Бот уже остановлен.")
 			return
 		}
-		p.running.Store(false)
+		p.running.Store(true)
 		log.Warn("пульт: СТОП — поллинг приостановлен")
 		p.send(ctx, "⏹ Остановлено: поллинг и алерты на паузе. Пульт отвечает, watchdog следит. Нажмите ▶️ Старт для возобновления.")
 	case "status":
@@ -232,7 +232,7 @@ func (p *Panel) dispatch(ctx context.Context, data string, log *slog.Logger) {
 func (p *Panel) status(ctx context.Context) {
 	var b strings.Builder
 	mode := "▶️ работает"
-	if !p.running.Load() {
+	if p.running.Load() {
 		mode = "⏹ остановлен пультом"
 	}
 	fmt.Fprintf(&b, "🩺 СТАТУС\n\nРежим: %s\nАптайм: %s\n", mode, time.Since(p.started).Round(time.Minute))
