@@ -19,8 +19,10 @@ type Specs struct {
 }
 
 var (
-	// Intel: «i5-1135G7», «i7 12850HX», «Core i3-1005G1»
-	intelRe = regexp.MustCompile(`(?i)\b(?:core\s+)?(i[3579])[-\s]?(\d{4,5}[a-z]{1,4})\b`)
+	// Intel: «i5-1135G7», «i7 12850HX», «Core i3-1005G1»,
+	// старые мобильные «i3-330M», Y-series «i5-7Y57». KP часто вставляет
+	// пробелы вокруг дефиса: «i5- 10210U», «i7 - 4702MQ».
+	intelRe = regexp.MustCompile(`(?i)\b(?:core\s+)?(i[3579])(?:\s*-\s*|\s+)?(\d{3}[a-z]{1,3}|\d{4,5}[a-z]{1,4}|\d[y]\d{2}[a-z]?)\b`)
 	// Intel Core Ultra: «Ultra 7 155H», «Ultra 9 285HX», а также каталожный
 	// формат магазинов «Core Ultra 9 Processor 290HX Plus» (плюс-варианты и
 	// многосуффиксные SKU: 290HX, 285HX, …).
