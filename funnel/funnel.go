@@ -307,12 +307,17 @@ func Run(ctx context.Context, f *Funnel, cfg *config.Config, gem *vision.GeminiC
 	if serr != nil {
 		log.Warn("воронка: реестр продавцов", "user_id", ad.UserID, "err", serr)
 	}
+	adLabel, lerr := storage.LoadLabel(ctx, cfg.ResearchDBPath, "ad", ad.AdID)
+	if lerr != nil {
+		log.Warn("воронка: ручная разметка объявления", "ad_id", ad.AdID, "err", lerr)
+	}
 	reviews := int(detail.User.Reviews)
 	if seller.Reviews > reviews {
 		reviews = seller.Reviews
 	}
 	facts := filters.AdFacts{
 		Title: ad.Name, Description: descPlain, Seller: detail.Seller(),
+		SellerLabel: seller.Label, AdLabel: adLabel,
 		Condition: detail.Condition, IsTrader: detail.IsTrader(), KPIzlog: detail.KPIzlog,
 		IsRenewed: ad.IsRenewed,
 		SellerAds: seller.AdsCount, SellerRecentAds: seller.RecentAdsCount,

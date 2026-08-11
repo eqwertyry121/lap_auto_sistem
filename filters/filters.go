@@ -27,6 +27,8 @@ type AdFacts struct {
 	Title           string
 	Description     string // plain text без HTML
 	Seller          string
+	SellerLabel     string // ручная разметка продавца: SHOP/PRIVATE
+	AdLabel         string // ручная разметка объявления: JUNK/CLEAN
 	Condition       string // поле KP: new/used/broken/""
 	IsTrader        bool   // KP пометил торговца (М1)
 	KPIzlog         bool   // витрина KP Izlog (М2)
@@ -86,6 +88,11 @@ const (
 // только на высоком пороге или в связке с автообновлением/отзывами/маркерами.
 // UNKNOWN трактуруется вызывающим кодом как PRIVATE.
 func L1(f AdFacts) Verdict {
+	switch manualLabel(f.SellerLabel) {
+	case "SHOP":
+		return Verdict{ClassShop, []string{"manual label: seller=SHOP"}}
+	}
+
 	// М1/М2 — честные метки KP: заявленный торговец или витрина.
 	if f.IsTrader {
 		return Verdict{ClassShop, []string{"М1: KP пометил продавца торговцем (title «Trgovac»)"}}
@@ -98,6 +105,9 @@ func L1(f AdFacts) Verdict {
 	}
 	if f.SellerKPIzlogSeen {
 		return Verdict{ClassShop, []string{"М2-history: этот user_id уже встречался с KP Izlog"}}
+	}
+	if manualLabel(f.SellerLabel) == "PRIVATE" {
+		return Verdict{ClassPrivate, []string{"manual label: seller=PRIVATE"}}
 	}
 
 	textNorm := normalize(f.Title + " " + f.Description)
@@ -178,8 +188,18 @@ func L1(f AdFacts) Verdict {
 // при цене внутри распределения конфигурации (≥60% медианы) считается
 // сомнительным → BROKEN_UNCERTAIN вместо тихого блока.
 func L2(f AdFacts) Verdict {
+	switch manualLabel(f.AdLabel) {
+	case "JUNK", "PARTS_ONLY", "BROKEN":
+		return Verdict{JunkPartsOnly, []string{"manual label: ad=JUNK"}}
+	}
 	if f.Condition == conditionBroken {
 		return Verdict{JunkPartsOnly, []string{"поле KP condition=broken"}}
+	}
+	switch manualLabel(f.AdLabel) {
+	case "CLEAN":
+		return Verdict{JunkClean, []string{"manual label: ad=CLEAN"}}
+	case "DEFECT":
+		return Verdict{JunkDefect, []string{"manual label: ad=DEFECT"}}
 	}
 
 	textNorm := normalize(f.Title + " " + f.Description)
@@ -224,6 +244,10 @@ func L2(f AdFacts) Verdict {
 	}
 
 	return Verdict{JunkClean, nil}
+}
+
+func manualLabel(s string) string {
+	return strings.ToUpper(strings.TrimSpace(s))
 }
 
 // chargerIsIncluded — «bez punjaca» НЕ дефект, если (а) зарядка явно в

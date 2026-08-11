@@ -94,6 +94,18 @@ func TestL1_SellerHistoryAndName(t *testing.T) {
 	}
 }
 
+func TestL1_ManualSellerLabels(t *testing.T) {
+	if v := L1(AdFacts{Title: "Laptop i5", SellerLabel: "SHOP"}); v.Class != ClassShop {
+		t.Fatalf("manual SHOP label must block seller: %s (%v)", v.Class, v.Reasons)
+	}
+	if v := L1(AdFacts{Title: "Laptop i5", SellerLabel: "PRIVATE", SellerAds: 99}); v.Class != ClassPrivate {
+		t.Fatalf("manual PRIVATE label must bypass behavioral heuristics: %s (%v)", v.Class, v.Reasons)
+	}
+	if v := L1(AdFacts{Title: "Laptop i5", SellerLabel: "PRIVATE", IsTrader: true}); v.Class != ClassShop {
+		t.Fatalf("manual PRIVATE label must not override current KP trader flag: %s (%v)", v.Class, v.Reasons)
+	}
+}
+
 // Реальный перекуп дня 2026-08-06 (лот 194371772, Acer VX15): без меток KP,
 // без маркеров v2, но самовывоз в 5 городах + маркетинговый суперлатив.
 const realResellerMulticity = `TECH SPECS (VX15) Operating System: Windows 10 Home Processor: Intel Core i5-7300HQ Memory: 12GB DDR4 prodaje se ispravan laptop, instaliran je win 10, laptop tragovi koristenja, vidi slike baterija dobra, healt 77 procenata, drzi oko 2.5 sata prodaje se sa punjacem acer, ukoliko zelite bez punjaca cena je 200e moguce licno preuzimanje u dole navedene gradove BEOGRAD ZRENJANIN KIKINDA NOVI SAD SUBOTICA . . NAJPOVOLJNIJA CENA LAPTOPA ZA OVAKVU KONFIGURACIJU . .`
@@ -182,6 +194,18 @@ func TestL2_NeRadiTastaturaIsDefect(t *testing.T) {
 	v := L2(AdFacts{Title: "Laptop ne radi tastatura"})
 	if v.Class != JunkDefect {
 		t.Fatalf("ne radi tastatura: got %s (%v), want DEFECT", v.Class, v.Reasons)
+	}
+}
+
+func TestL2_ManualAdLabels(t *testing.T) {
+	if v := L2(AdFacts{Title: "Clean laptop", AdLabel: "JUNK"}); v.Class != JunkPartsOnly {
+		t.Fatalf("manual JUNK label must block ad: %s (%v)", v.Class, v.Reasons)
+	}
+	if v := L2(AdFacts{Title: "Laptop ne radi tastatura", AdLabel: "CLEAN"}); v.Class != JunkClean {
+		t.Fatalf("manual CLEAN label must override text markers: %s (%v)", v.Class, v.Reasons)
+	}
+	if v := L2(AdFacts{Title: "Laptop", Condition: "broken", AdLabel: "CLEAN"}); v.Class != JunkPartsOnly {
+		t.Fatalf("manual CLEAN label must not override KP condition=broken: %s (%v)", v.Class, v.Reasons)
 	}
 }
 
