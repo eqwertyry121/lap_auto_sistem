@@ -108,6 +108,7 @@ var (
 	storageBefore = regexp.MustCompile(`(?i)\b(?:ssd|nvme|m\.?2)\s*$`)
 	ramBefore     = regexp.MustCompile(`(?i)\b(?:ram|ddr\d?|memorij[ae]?)\s*$`)
 	tbRe          = regexp.MustCompile(`(?i)\b(\d)\s*tb\b`)
+	bareStorageRe = regexp.MustCompile(`(?i)(?:^|[\s/,+-])(\d{3,4})(?:\s*(?:ssd|nvme|g\b|gb\b))?\b`)
 )
 
 // ramValues — типичные объёмы оперативки (защита от ложных срабатываний).
@@ -116,15 +117,27 @@ var ramValues = map[int]bool{
 	24: true, 32: true, 48: true, 64: true, 96: true, 128: true,
 }
 
+var storageValues = map[int]bool{
+	120: true, 128: true, 180: true, 240: true, 250: true, 256: true,
+	480: true, 500: true, 512: true, 960: true, 1000: true, 1024: true,
+	2000: true, 2048: true, 4000: true, 4096: true,
+}
+
+var gpuVRAMBeforeRe = regexp.MustCompile(`(?i)(?:nvidia\s*)?(?:geforce\s*)?(?:rtx\s*a?\d{3,4}(?:\s*(?:ti|super|ada))?|gtx\s*\d{3,4}(?:\s*ti)?|mx\s*\d{3}|quadro\s*[a-z]?\d{3,4}[a-z]?|[akp]\d{4}[a-z]?|a[1-5]000|t(?:550|1000|1200|2000)|radeon\s*pro\s*\d{4}[a-z]?|rx\s*\d{4}m?|nvidia)\s*[-:]?\s*$`)
+
 // ExtractMemory определяет RAM и SSD по вхождениям «NNGB» и ключевым словам.
 // Логика: GB, сразу за которым идёт ssd/nvme/m.2 — накопитель; перед которым
 // ram/ddr — память; первое «чистое» GB типового объёма — память (в заголовках
 // KP порядок почти всегда «CPU/RAM/SSD»).
 func ExtractMemory(text string) (ramGB, ssdGB int) {
+	ramEnd := -1
 	for _, m := range gbRe.FindAllStringSubmatchIndex(text, -1) {
 		val, _ := strconv.Atoi(text[m[2]:m[3]])
 		after := text[m[1]:min(m[1]+12, len(text))]
 		before := text[max(0, m[0]-16):m[0]]
+		if looksLikeGPUVRAM(text, m[0]) {
+			continue
+		}
 
 		switch {
 		case val >= 64 && (storageRe.MatchString(after) || storageBefore.MatchString(before)):
@@ -141,10 +154,12 @@ func ExtractMemory(text string) (ramGB, ssdGB int) {
 		case ramBefore.MatchString(before):
 			if ramGB == 0 && ramValues[val] {
 				ramGB = val
+				ramEnd = m[1]
 			}
 		default:
 			if ramGB == 0 && ramValues[val] {
 				ramGB = val
+				ramEnd = m[1]
 			}
 		}
 	}
@@ -154,7 +169,30 @@ func ExtractMemory(text string) (ramGB, ssdGB int) {
 			ssdGB = n * 1024
 		}
 	}
+	if ssdGB == 0 && ramEnd >= 0 && ramEnd < len(text) {
+		if ssd := extractBareStorageAfterRAM(text[ramEnd:]); ssd > 0 {
+			ssdGB = ssd
+		}
+	}
 	return ramGB, ssdGB
+}
+
+func extractBareStorageAfterRAM(tail string) int {
+	for _, m := range bareStorageRe.FindAllStringSubmatch(tail, -1) {
+		val, _ := strconv.Atoi(m[1])
+		if storageValues[val] {
+			return val
+		}
+	}
+	return 0
+}
+
+func looksLikeGPUVRAM(text string, gbStart int) bool {
+	if gbStart < 0 || gbStart > len(text) {
+		return false
+	}
+	before := text[max(0, gbStart-48):gbStart]
+	return gpuVRAMBeforeRe.MatchString(before)
 }
 
 var (

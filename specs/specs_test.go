@@ -116,6 +116,11 @@ func TestExtractMemory(t *testing.T) {
 		{"DELL Alienware 16X Aurora – Ultra 9 / 32GB RAM", 32, 0},
 		{"Radni laptop i5/16gb/SSD +GARANCIJA", 16, 0},
 		{"Lenovo ThinkPad E14 Gen 6 – Ryzen 7 / 16GB / 512GB", 16, 512},
+		{"Lenovo ThinkPad P52 Intel i7-8850H Quadro P1000 4GB 16GB 512", 16, 512},
+		{"Laptop MSI GE75 Raider 8RF / i7-8750H / GTX 1070 8GB / 32GB", 32, 0},
+		{"Dell i5 12500H / RTX 3050 Ti / 16GB DDR5 / 512GB nvme", 16, 512},
+		{"ASUS ROG Zephyrus G14 RTX 5060 8GB 32GB LPDDR5X 1TB", 32, 1024},
+		{"ThinkPad T14 Gen 2 16GB DDR4 3200MHz Iris Xe", 16, 0},
 		{"SSD 512GB nov, laptop", 0, 512},
 		{"Laptop 15.6\" FHD", 0, 0},
 	}
