@@ -30,20 +30,24 @@ func TestDefaultConfigValidates(t *testing.T) {
 	if cfg.DBBackupDir != "data/backups" {
 		t.Fatalf("DBBackupDir = %q", cfg.DBBackupDir)
 	}
+	if cfg.GeminiDailyBudgetUSD != 0 {
+		t.Fatalf("GeminiDailyBudgetUSD = %.6f", cfg.GeminiDailyBudgetUSD)
+	}
 }
 
 func TestConfigRejectsInvalidEnvValues(t *testing.T) {
 	cfg := loadTestConfig(map[string]string{
-		"POLL_INTERVAL_SEC":  "abc",
-		"GEMINI_CONCURRENCY": "fast",
-		"REQUIRE_DGPU":       "maybe",
+		"POLL_INTERVAL_SEC":       "abc",
+		"GEMINI_CONCURRENCY":      "fast",
+		"GEMINI_DAILY_BUDGET_USD": "money",
+		"REQUIRE_DGPU":            "maybe",
 	})
 	err := cfg.Validate()
 	if err == nil {
 		t.Fatal("Validate must reject invalid env values")
 	}
 	msg := err.Error()
-	for _, want := range []string{"POLL_INTERVAL_SEC", "GEMINI_CONCURRENCY", "REQUIRE_DGPU"} {
+	for _, want := range []string{"POLL_INTERVAL_SEC", "GEMINI_CONCURRENCY", "GEMINI_DAILY_BUDGET_USD", "REQUIRE_DGPU"} {
 		if !strings.Contains(msg, want) {
 			t.Fatalf("error %q does not mention %s", msg, want)
 		}
@@ -73,6 +77,7 @@ func TestConfigRejectsBadThresholds(t *testing.T) {
 		{"diamond positive", func(c *Config) { c.DiamondDevPct = 1 }, "DIAMOND_DEV_PCT"},
 		{"suspect above diamond", func(c *Config) { c.SuspectDevPct = c.DiamondDevPct }, "SUSPECT_DEV_PCT"},
 		{"negative manual", func(c *Config) { c.ManualMinEUR = -1 }, "MANUAL_MIN_EUR"},
+		{"negative gemini budget", func(c *Config) { c.GeminiDailyBudgetUSD = -0.01 }, "GEMINI_DAILY_BUDGET_USD"},
 		{"bad tol", func(c *Config) { c.MarketTolPct = 101 }, "MARKET_TOL_PCT"},
 	}
 	for _, c := range cases {

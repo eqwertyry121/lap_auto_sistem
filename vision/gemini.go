@@ -7,8 +7,10 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"math"
 	"net/http"
 	"strconv"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -32,11 +34,12 @@ type GeminiClient struct {
 }
 
 type geminiLimiter struct {
-	sem        chan struct{}
-	dailyLimit int
-	mu         sync.Mutex
-	day        string
-	calls      int
+	sem                chan struct{}
+	dailyLimit         int
+	dailyBudgetUSDNano int64
+	mu                 sync.Mutex
+	day                string
+	calls              int
 }
 
 type geminiCircuit struct {
@@ -47,14 +50,25 @@ type geminiCircuit struct {
 
 type geminiStats struct {
 	lastOKUnix atomic.Int64
+	mu         sync.Mutex
+	day        string
+	prompt     int64
+	output     int64
+	total      int64
+	costNanos  int64
 }
 
 type GeminiStats struct {
-	CallsToday    int
-	DailyLimit    int
-	LastSuccess   time.Time
-	CircuitUntil  time.Time
-	CircuitReason string
+	CallsToday        int
+	DailyLimit        int
+	PromptTokensToday int64
+	OutputTokensToday int64
+	TotalTokensToday  int64
+	EstimatedCostUSD  float64
+	DailyBudgetUSD    float64
+	LastSuccess       time.Time
+	CircuitUntil      time.Time
+	CircuitReason     string
 }
 
 func NewGeminiClient(apiKey, model string) *GeminiClient {
@@ -87,11 +101,22 @@ func (g *GeminiClient) Stats() GeminiStats {
 	if g == nil {
 		return GeminiStats{}
 	}
+	now := time.Now()
 	out := GeminiStats{LastSuccess: g.LastSuccess()}
+	if g.stats != nil {
+		g.stats.mu.Lock()
+		g.stats.resetLocked(now)
+		out.PromptTokensToday = g.stats.prompt
+		out.OutputTokensToday = g.stats.output
+		out.TotalTokensToday = g.stats.total
+		out.EstimatedCostUSD = float64(g.stats.costNanos) / 1e9
+		g.stats.mu.Unlock()
+	}
 	if g.limiter != nil {
 		g.limiter.mu.Lock()
 		out.DailyLimit = g.limiter.dailyLimit
-		if g.limiter.day == time.Now().Format("2006-01-02") {
+		out.DailyBudgetUSD = float64(g.limiter.dailyBudgetUSDNano) / 1e9
+		if g.limiter.day == now.Format("2006-01-02") {
 			out.CallsToday = g.limiter.calls
 		}
 		g.limiter.mu.Unlock()
@@ -118,6 +143,23 @@ func (g *GeminiClient) SetLimits(concurrency, dailyLimit int) *GeminiClient {
 		lim.sem = make(chan struct{}, concurrency)
 	}
 	g.limiter = lim
+	return g
+}
+
+func (g *GeminiClient) SetDailyBudgetUSD(limit float64) *GeminiClient {
+	if g == nil {
+		return nil
+	}
+	if g.limiter == nil {
+		g.limiter = &geminiLimiter{}
+	}
+	g.limiter.mu.Lock()
+	defer g.limiter.mu.Unlock()
+	if limit <= 0 {
+		g.limiter.dailyBudgetUSDNano = 0
+		return g
+	}
+	g.limiter.dailyBudgetUSDNano = int64(math.Round(limit * 1e9))
 	return g
 }
 
@@ -191,6 +233,15 @@ type response struct {
 		Code    int    `json:"code"`
 		Message string `json:"message"`
 	} `json:"error"`
+	UsageMetadata *usageMetadata `json:"usageMetadata,omitempty"`
+}
+
+type usageMetadata struct {
+	PromptTokenCount        int64 `json:"promptTokenCount"`
+	CandidatesTokenCount    int64 `json:"candidatesTokenCount"`
+	TotalTokenCount         int64 `json:"totalTokenCount"`
+	ThoughtsTokenCount      int64 `json:"thoughtsTokenCount"`
+	CachedContentTokenCount int64 `json:"cachedContentTokenCount"`
 }
 
 // Generate выполняет запрос: системный промпт + части (текст/изображения).
@@ -299,6 +350,7 @@ func (g *GeminiClient) call(ctx context.Context, req request) (*response, error)
 	}
 	if g.stats != nil {
 		g.stats.lastOKUnix.Store(time.Now().Unix())
+		g.stats.recordUsage(time.Now(), g.model, gr.UsageMetadata)
 	}
 	return &gr, nil
 }
@@ -462,6 +514,10 @@ func (g *GeminiClient) acquire(ctx context.Context) (func(), error) {
 			<-lim.sem
 		}
 	}
+	if err := lim.checkDailyBudget(g.stats); err != nil {
+		release()
+		return nil, err
+	}
 	if err := lim.reserveDaily(); err != nil {
 		release()
 		return nil, err
@@ -485,6 +541,112 @@ func (l *geminiLimiter) reserveDaily() error {
 	}
 	l.calls++
 	return nil
+}
+
+func (l *geminiLimiter) checkDailyBudget(stats *geminiStats) error {
+	if l == nil || stats == nil {
+		return nil
+	}
+	l.mu.Lock()
+	budget := l.dailyBudgetUSDNano
+	l.mu.Unlock()
+	if budget <= 0 {
+		return nil
+	}
+	spent := stats.costNanosToday(time.Now())
+	if spent >= budget {
+		return fmt.Errorf("gemini: daily cost budget reached ($%.6f/$%.6f)",
+			float64(spent)/1e9, float64(budget)/1e9)
+	}
+	return nil
+}
+
+func (s *geminiStats) recordUsage(now time.Time, model string, usage *usageMetadata) {
+	if s == nil || usage == nil {
+		return
+	}
+	prompt := max64(usage.PromptTokenCount-usage.CachedContentTokenCount, 0)
+	output := max64(usage.CandidatesTokenCount, 0) + max64(usage.ThoughtsTokenCount, 0)
+	total := max64(usage.TotalTokenCount, prompt+output)
+	costNanos := estimateGeminiCostNanos(model, prompt, output)
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.resetLocked(now)
+	s.prompt += prompt
+	s.output += output
+	s.total += total
+	s.costNanos += costNanos
+}
+
+func (s *geminiStats) costNanosToday(now time.Time) int64 {
+	if s == nil {
+		return 0
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.resetLocked(now)
+	return s.costNanos
+}
+
+func (s *geminiStats) resetLocked(now time.Time) {
+	day := now.Format("2006-01-02")
+	if s.day == day {
+		return
+	}
+	s.day = day
+	s.prompt = 0
+	s.output = 0
+	s.total = 0
+	s.costNanos = 0
+}
+
+type geminiPrice struct {
+	inputUSDPerMTok  float64
+	outputUSDPerMTok float64
+}
+
+func estimateGeminiCostNanos(model string, promptTokens, outputTokens int64) int64 {
+	price, ok := geminiPriceForModel(model)
+	if !ok {
+		return 0
+	}
+	costNanos := float64(promptTokens)*price.inputUSDPerMTok*1000 +
+		float64(outputTokens)*price.outputUSDPerMTok*1000
+	return int64(math.Round(costNanos))
+}
+
+func geminiPriceForModel(model string) (geminiPrice, bool) {
+	m := strings.ToLower(strings.TrimSpace(model))
+	m = strings.TrimPrefix(m, "models/")
+	switch {
+	case strings.Contains(m, "gemini-2.5-flash-lite"):
+		return geminiPrice{inputUSDPerMTok: 0.10, outputUSDPerMTok: 0.40}, true
+	case strings.Contains(m, "gemini-2.5-flash"):
+		return geminiPrice{inputUSDPerMTok: 0.30, outputUSDPerMTok: 2.50}, true
+	case strings.Contains(m, "gemini-2.5-pro"):
+		return geminiPrice{inputUSDPerMTok: 1.25, outputUSDPerMTok: 10.00}, true
+	case strings.Contains(m, "gemini-3.1-flash-lite"):
+		return geminiPrice{inputUSDPerMTok: 0.25, outputUSDPerMTok: 1.50}, true
+	case strings.Contains(m, "gemini-3.5-flash-lite"):
+		return geminiPrice{inputUSDPerMTok: 0.30, outputUSDPerMTok: 2.50}, true
+	case strings.Contains(m, "gemini-3.1-flash"):
+		return geminiPrice{inputUSDPerMTok: 0.75, outputUSDPerMTok: 4.50}, true
+	case strings.Contains(m, "gemini-3.5-flash"):
+		return geminiPrice{inputUSDPerMTok: 1.50, outputUSDPerMTok: 9.00}, true
+	case strings.Contains(m, "gemini-3-flash"):
+		return geminiPrice{inputUSDPerMTok: 0.50, outputUSDPerMTok: 3.00}, true
+	case strings.Contains(m, "gemini-3.1-pro"):
+		return geminiPrice{inputUSDPerMTok: 2.00, outputUSDPerMTok: 12.00}, true
+	}
+	return geminiPrice{}, false
+}
+
+func max64(a, b int64) int64 {
+	if a > b {
+		return a
+	}
+	return b
 }
 
 func textOf(gr *response) (string, error) {

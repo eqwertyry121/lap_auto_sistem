@@ -32,17 +32,22 @@ func nextDigestTime(now time.Time, h, m int) time.Time {
 }
 
 type runtimeHealth struct {
-	Now                time.Time
-	LastSearchOK       time.Time
-	LastDetailOK       time.Time
-	LastGeminiOK       time.Time
-	LastTelegramOK     time.Time
-	LastBackupOK       time.Time
-	GeminiCallsToday   int
-	GeminiDailyLimit   int
-	GeminiCircuitUntil time.Time
-	SchemaVersion      int
-	BuildVersion       string
+	Now                     time.Time
+	LastSearchOK            time.Time
+	LastDetailOK            time.Time
+	LastGeminiOK            time.Time
+	LastTelegramOK          time.Time
+	LastBackupOK            time.Time
+	GeminiCallsToday        int
+	GeminiDailyLimit        int
+	GeminiPromptTokensToday int64
+	GeminiOutputTokensToday int64
+	GeminiTotalTokensToday  int64
+	GeminiEstimatedCostUSD  float64
+	GeminiDailyBudgetUSD    float64
+	GeminiCircuitUntil      time.Time
+	SchemaVersion           int
+	BuildVersion            string
 }
 
 // digestText собирает HTML-текст дайджеста. challenges — счётчик с момента
@@ -83,6 +88,10 @@ func digestText(uptime time.Duration, byStatus map[string]int, challenges int64,
 	fmt.Fprintf(&b, "  - detail_ok: %s\n", healthAge(now, health.LastDetailOK))
 	fmt.Fprintf(&b, "  - gemini_ok: %s\n", healthAge(now, health.LastGeminiOK))
 	fmt.Fprintf(&b, "  - gemini_calls: %s\n", geminiCallsLine(health.GeminiCallsToday, health.GeminiDailyLimit))
+	fmt.Fprintf(&b, "  - gemini_tokens: in=%d out=%d total=%d\n",
+		health.GeminiPromptTokensToday, health.GeminiOutputTokensToday, health.GeminiTotalTokensToday)
+	fmt.Fprintf(&b, "  - gemini_cost_est: %s\n",
+		geminiCostLine(health.GeminiEstimatedCostUSD, health.GeminiDailyBudgetUSD))
 	if health.GeminiCircuitUntil.After(now) {
 		fmt.Fprintf(&b, "  - gemini_circuit: %s\n", healthRemaining(now, health.GeminiCircuitUntil))
 	}
@@ -142,6 +151,23 @@ func geminiCallsLine(callsToday, dailyLimit int) string {
 		return fmt.Sprintf("%d/%d", callsToday, dailyLimit)
 	}
 	return fmt.Sprintf("%d/unlimited", callsToday)
+}
+
+func geminiCostLine(costUSD, budgetUSD float64) string {
+	if budgetUSD > 0 {
+		return fmt.Sprintf("%s/%s", formatUSD(costUSD), formatUSD(budgetUSD))
+	}
+	return formatUSD(costUSD)
+}
+
+func formatUSD(v float64) string {
+	if v < 0 {
+		v = 0
+	}
+	if v < 0.01 {
+		return fmt.Sprintf("$%.6f", v)
+	}
+	return fmt.Sprintf("$%.4f", v)
 }
 
 func nonEmpty(s, fallback string) string {

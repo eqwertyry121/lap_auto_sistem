@@ -16,13 +16,14 @@ type Config struct {
 	DBBackupDir  string
 	FetchDelay   time.Duration
 
-	GeminiAPIKey      string
-	GeminiModel       string
-	GeminiTextModel   string
-	GeminiVisionModel string
-	GeminiSearchModel string
-	GeminiConcurrency int
-	GeminiDailyLimit  int
+	GeminiAPIKey         string
+	GeminiModel          string
+	GeminiTextModel      string
+	GeminiVisionModel    string
+	GeminiSearchModel    string
+	GeminiConcurrency    int
+	GeminiDailyLimit     int
+	GeminiDailyBudgetUSD float64
 
 	TelegramToken  string
 	TelegramChatID string
@@ -75,21 +76,22 @@ func loadWithEnv(r *envReader) *Config {
 	liteGeminiModel := r.str("GEMINI_LITE_MODEL", "gemini-2.5-flash-lite")
 
 	cfg := &Config{
-		PollInterval:      r.durationSec("POLL_INTERVAL_SEC", 45),
-		DBPath:            r.str("DB_PATH", "data/kp_bot.db"),
-		DBBackupDir:       r.str("DB_BACKUP_DIR", "data/backups"),
-		FetchDelay:        time.Duration(r.int("FETCH_DELAY_MS", 700)) * time.Millisecond,
-		GeminiAPIKey:      r.raw("GEMINI_API_KEY"),
-		GeminiModel:       baseGeminiModel,
-		GeminiTextModel:   r.str("GEMINI_TEXT_MODEL", liteGeminiModel),
-		GeminiVisionModel: r.str("GEMINI_VISION_MODEL", liteGeminiModel),
-		GeminiSearchModel: r.str("GEMINI_SEARCH_MODEL", liteGeminiModel),
-		GeminiConcurrency: r.int("GEMINI_CONCURRENCY", 5),
-		GeminiDailyLimit:  r.int("GEMINI_DAILY_LIMIT", 80),
-		TelegramToken:     r.raw("TELEGRAM_BOT_TOKEN"),
-		TelegramChatID:    r.raw("TELEGRAM_CHAT_ID"),
-		CSVPath:           r.str("CSV_PATH", "data/market_history.csv"),
-		ExportInterval:    r.durationMin("EXPORT_INTERVAL_MIN", 30),
+		PollInterval:         r.durationSec("POLL_INTERVAL_SEC", 45),
+		DBPath:               r.str("DB_PATH", "data/kp_bot.db"),
+		DBBackupDir:          r.str("DB_BACKUP_DIR", "data/backups"),
+		FetchDelay:           time.Duration(r.int("FETCH_DELAY_MS", 700)) * time.Millisecond,
+		GeminiAPIKey:         r.raw("GEMINI_API_KEY"),
+		GeminiModel:          baseGeminiModel,
+		GeminiTextModel:      r.str("GEMINI_TEXT_MODEL", liteGeminiModel),
+		GeminiVisionModel:    r.str("GEMINI_VISION_MODEL", liteGeminiModel),
+		GeminiSearchModel:    r.str("GEMINI_SEARCH_MODEL", liteGeminiModel),
+		GeminiConcurrency:    r.int("GEMINI_CONCURRENCY", 5),
+		GeminiDailyLimit:     r.int("GEMINI_DAILY_LIMIT", 80),
+		GeminiDailyBudgetUSD: r.float("GEMINI_DAILY_BUDGET_USD", 0),
+		TelegramToken:        r.raw("TELEGRAM_BOT_TOKEN"),
+		TelegramChatID:       r.raw("TELEGRAM_CHAT_ID"),
+		CSVPath:              r.str("CSV_PATH", "data/market_history.csv"),
+		ExportInterval:       r.durationMin("EXPORT_INTERVAL_MIN", 30),
 
 		ChallengePause: r.durationMin("CHALLENGE_PAUSE_MIN", 30),
 		HeartbeatPath:  r.str("HEARTBEAT_PATH", "data/kpbot.heartbeat"),
@@ -144,6 +146,9 @@ func (c *Config) Validate() error {
 	}
 	if c.GeminiDailyLimit < 0 {
 		return fmt.Errorf("GEMINI_DAILY_LIMIT must be >= 0")
+	}
+	if c.GeminiDailyBudgetUSD < 0 {
+		return fmt.Errorf("GEMINI_DAILY_BUDGET_USD must be >= 0")
 	}
 	if c.DiamondMinN <= 0 {
 		return fmt.Errorf("DIAMOND_MIN_N must be positive")
@@ -228,6 +233,19 @@ func (r *envReader) int(key string, def int) int {
 		return n
 	}
 	return def
+}
+
+func (r *envReader) float(key string, def float64) float64 {
+	v := r.raw(key)
+	if v == "" {
+		return def
+	}
+	n, err := strconv.ParseFloat(v, 64)
+	if err != nil {
+		r.errors = append(r.errors, fmt.Sprintf("%s=%q is not a float", key, v))
+		return def
+	}
+	return n
 }
 
 func (r *envReader) bool(key string, def bool) bool {

@@ -29,21 +29,26 @@ import (
 // heartbeat для watchdog, пауза при антибот-челлендже, счётчик челленджей,
 // ручной стоп/старт из пульта Telegram.
 type botState struct {
-	beat           *hb.Heartbeat
-	pausedUntil    time.Time
-	challengeCount atomic.Int64
-	startedAt      time.Time
-	lastSearchOK   atomic.Int64
-	lastDetailOK   atomic.Int64
-	lastGeminiOK   atomic.Int64
-	lastTelegramOK atomic.Int64
-	lastBackupOK   atomic.Int64
-	geminiCalls    atomic.Int64
-	geminiLimit    atomic.Int64
-	geminiCircuit  atomic.Int64
-	schemaVersion  atomic.Int64
-	buildVersion   string
-	manualPaused   atomic.Bool // пульт: ⏹ Стоп
+	beat               *hb.Heartbeat
+	pausedUntil        time.Time
+	challengeCount     atomic.Int64
+	startedAt          time.Time
+	lastSearchOK       atomic.Int64
+	lastDetailOK       atomic.Int64
+	lastGeminiOK       atomic.Int64
+	lastTelegramOK     atomic.Int64
+	lastBackupOK       atomic.Int64
+	geminiCalls        atomic.Int64
+	geminiLimit        atomic.Int64
+	geminiBudgetNanos  atomic.Int64
+	geminiPromptTokens atomic.Int64
+	geminiOutputTokens atomic.Int64
+	geminiTotalTokens  atomic.Int64
+	geminiCostNanos    atomic.Int64
+	geminiCircuit      atomic.Int64
+	schemaVersion      atomic.Int64
+	buildVersion       string
+	manualPaused       atomic.Bool // пульт: ⏹ Стоп
 }
 
 // enterChallengePause — реакция на антибот-челлендж KP: длинная пауза вместо
@@ -60,13 +65,22 @@ func (s *botState) markLastGeminiOK(t time.Time)   { storeUnixTime(&s.lastGemini
 func (s *botState) markLastTelegramOK(t time.Time) { storeUnixTime(&s.lastTelegramOK, t) }
 func (s *botState) markLastBackupOK(t time.Time)   { storeUnixTime(&s.lastBackupOK, t) }
 
-func (s *botState) LastSearchOK() time.Time   { return loadUnixTime(&s.lastSearchOK) }
-func (s *botState) LastDetailOK() time.Time   { return loadUnixTime(&s.lastDetailOK) }
-func (s *botState) LastGeminiOK() time.Time   { return loadUnixTime(&s.lastGeminiOK) }
-func (s *botState) LastTelegramOK() time.Time { return loadUnixTime(&s.lastTelegramOK) }
-func (s *botState) LastBackupOK() time.Time   { return loadUnixTime(&s.lastBackupOK) }
-func (s *botState) GeminiCallsToday() int     { return int(s.geminiCalls.Load()) }
-func (s *botState) GeminiDailyLimit() int     { return int(s.geminiLimit.Load()) }
+func (s *botState) LastSearchOK() time.Time        { return loadUnixTime(&s.lastSearchOK) }
+func (s *botState) LastDetailOK() time.Time        { return loadUnixTime(&s.lastDetailOK) }
+func (s *botState) LastGeminiOK() time.Time        { return loadUnixTime(&s.lastGeminiOK) }
+func (s *botState) LastTelegramOK() time.Time      { return loadUnixTime(&s.lastTelegramOK) }
+func (s *botState) LastBackupOK() time.Time        { return loadUnixTime(&s.lastBackupOK) }
+func (s *botState) GeminiCallsToday() int          { return int(s.geminiCalls.Load()) }
+func (s *botState) GeminiDailyLimit() int          { return int(s.geminiLimit.Load()) }
+func (s *botState) GeminiPromptTokensToday() int64 { return s.geminiPromptTokens.Load() }
+func (s *botState) GeminiOutputTokensToday() int64 { return s.geminiOutputTokens.Load() }
+func (s *botState) GeminiTotalTokensToday() int64  { return s.geminiTotalTokens.Load() }
+func (s *botState) GeminiEstimatedCostUSD() float64 {
+	return float64(s.geminiCostNanos.Load()) / 1e9
+}
+func (s *botState) GeminiDailyBudgetUSD() float64 {
+	return float64(s.geminiBudgetNanos.Load()) / 1e9
+}
 func (s *botState) GeminiCircuitUntil() time.Time {
 	return loadUnixTime(&s.geminiCircuit)
 }
@@ -87,6 +101,11 @@ func (s *botState) syncGeminiStats(stats vision.GeminiStats) {
 	}
 	s.geminiCalls.Store(int64(stats.CallsToday))
 	s.geminiLimit.Store(int64(stats.DailyLimit))
+	s.geminiPromptTokens.Store(stats.PromptTokensToday)
+	s.geminiOutputTokens.Store(stats.OutputTokensToday)
+	s.geminiTotalTokens.Store(stats.TotalTokensToday)
+	s.geminiCostNanos.Store(int64(stats.EstimatedCostUSD * 1e9))
+	s.geminiBudgetNanos.Store(int64(stats.DailyBudgetUSD * 1e9))
 	if stats.CircuitUntil.IsZero() {
 		s.geminiCircuit.Store(0)
 	} else {
@@ -96,17 +115,22 @@ func (s *botState) syncGeminiStats(stats vision.GeminiStats) {
 
 func (s *botState) healthSnapshot(now time.Time) runtimeHealth {
 	return runtimeHealth{
-		Now:                now,
-		LastSearchOK:       s.LastSearchOK(),
-		LastDetailOK:       s.LastDetailOK(),
-		LastGeminiOK:       s.LastGeminiOK(),
-		LastTelegramOK:     s.LastTelegramOK(),
-		LastBackupOK:       s.LastBackupOK(),
-		GeminiCallsToday:   s.GeminiCallsToday(),
-		GeminiDailyLimit:   s.GeminiDailyLimit(),
-		GeminiCircuitUntil: s.GeminiCircuitUntil(),
-		SchemaVersion:      s.SchemaVersion(),
-		BuildVersion:       s.BuildVersion(),
+		Now:                     now,
+		LastSearchOK:            s.LastSearchOK(),
+		LastDetailOK:            s.LastDetailOK(),
+		LastGeminiOK:            s.LastGeminiOK(),
+		LastTelegramOK:          s.LastTelegramOK(),
+		LastBackupOK:            s.LastBackupOK(),
+		GeminiCallsToday:        s.GeminiCallsToday(),
+		GeminiDailyLimit:        s.GeminiDailyLimit(),
+		GeminiPromptTokensToday: s.GeminiPromptTokensToday(),
+		GeminiOutputTokensToday: s.GeminiOutputTokensToday(),
+		GeminiTotalTokensToday:  s.GeminiTotalTokensToday(),
+		GeminiEstimatedCostUSD:  s.GeminiEstimatedCostUSD(),
+		GeminiDailyBudgetUSD:    s.GeminiDailyBudgetUSD(),
+		GeminiCircuitUntil:      s.GeminiCircuitUntil(),
+		SchemaVersion:           s.SchemaVersion(),
+		BuildVersion:            s.BuildVersion(),
 	}
 }
 
@@ -192,7 +216,9 @@ func main() {
 	}
 	go st.beat.Run(ctx, time.Minute)
 
-	gemini := vision.NewGeminiClient(cfg.GeminiAPIKey, cfg.GeminiModel).SetLimits(cfg.GeminiConcurrency, cfg.GeminiDailyLimit)
+	gemini := vision.NewGeminiClient(cfg.GeminiAPIKey, cfg.GeminiModel).
+		SetLimits(cfg.GeminiConcurrency, cfg.GeminiDailyLimit).
+		SetDailyBudgetUSD(cfg.GeminiDailyBudgetUSD)
 	st.syncGeminiStats(gemini.Stats())
 	tg := notifier.New(cfg.TelegramToken, cfg.TelegramChatID)
 	kp := collector.NewClient()
@@ -264,6 +290,7 @@ func main() {
 		"poll_interval", cfg.PollInterval.String(),
 		"gemini_concurrency", cfg.GeminiConcurrency,
 		"gemini_daily_limit", cfg.GeminiDailyLimit,
+		"gemini_daily_budget_usd", cfg.GeminiDailyBudgetUSD,
 		"gemini_model", cfg.GeminiModel,
 		"gemini_text_model", cfg.GeminiTextModel,
 		"gemini_vision_model", cfg.GeminiVisionModel,

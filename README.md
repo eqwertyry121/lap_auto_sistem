@@ -111,6 +111,7 @@ If Telegram variables are absent, alerts are printed to the console.
 | `GEMINI_SEARCH_MODEL` | `gemini-2.5-flash-lite` | exact model research model |
 | `GEMINI_CONCURRENCY` | `5` | Gemini parallel request limit |
 | `GEMINI_DAILY_LIMIT` | `80` | daily Gemini call limit, `0` disables it |
+| `GEMINI_DAILY_BUDGET_USD` | `0` | estimated daily Gemini spend cap, `0` disables it |
 | `MARKET_REFRESH_MIN` | `360` | market model refresh period |
 | `DIAMOND_DEV_PCT` | `-15` | diamond threshold vs decision reference |
 | `SUSPECT_DEV_PCT` | `-40` | bait-risk threshold |

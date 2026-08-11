@@ -76,6 +76,59 @@ func TestGeminiRetriesRetryableHTTP(t *testing.T) {
 	}
 }
 
+func TestGeminiRecordsTokenUsageAndCost(t *testing.T) {
+	g := NewGeminiClient("key", "gemini-2.5-flash-lite").SetLimits(1, 10)
+	g.http = &http.Client{Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
+		return geminiResponse(http.StatusOK, `{
+			"candidates":[{"content":{"parts":[{"text":"{\"ok\":true}"}]}}],
+			"usageMetadata":{
+				"promptTokenCount":1000,
+				"candidatesTokenCount":100,
+				"thoughtsTokenCount":50,
+				"totalTokenCount":1150
+			}
+		}`), nil
+	})}
+
+	if _, err := g.Generate(context.Background(), "", []Part{{Text: "test"}}); err != nil {
+		t.Fatalf("Generate: %v", err)
+	}
+	stats := g.Stats()
+	if stats.PromptTokensToday != 1000 || stats.OutputTokensToday != 150 || stats.TotalTokensToday != 1150 {
+		t.Fatalf("token stats = %+v", stats)
+	}
+	if stats.EstimatedCostUSD < 0.000159 || stats.EstimatedCostUSD > 0.000161 {
+		t.Fatalf("EstimatedCostUSD = %.9f, want about 0.000160", stats.EstimatedCostUSD)
+	}
+}
+
+func TestGeminiDailyBudgetBlocksAfterSpend(t *testing.T) {
+	var calls atomic.Int32
+	g := NewGeminiClient("key", "gemini-2.5-flash-lite").
+		SetLimits(1, 10).
+		SetDailyBudgetUSD(0.000001)
+	g.http = &http.Client{Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
+		calls.Add(1)
+		return geminiResponse(http.StatusOK, `{
+			"candidates":[{"content":{"parts":[{"text":"{\"ok\":true}"}]}}],
+			"usageMetadata":{"promptTokenCount":1000,"candidatesTokenCount":100,"totalTokenCount":1100}
+		}`), nil
+	})}
+
+	if _, err := g.Generate(context.Background(), "", []Part{{Text: "first"}}); err != nil {
+		t.Fatalf("first Generate: %v", err)
+	}
+	if _, err := g.Generate(context.Background(), "", []Part{{Text: "second"}}); err == nil {
+		t.Fatal("second Generate must fail on daily cost budget")
+	}
+	if calls.Load() != 1 {
+		t.Fatalf("transport calls = %d, want 1", calls.Load())
+	}
+	if stats := g.Stats(); stats.DailyBudgetUSD != 0.000001 {
+		t.Fatalf("DailyBudgetUSD = %.9f", stats.DailyBudgetUSD)
+	}
+}
+
 func TestGeminiCooldownSkipsCallAndDailyReserve(t *testing.T) {
 	withFastGeminiRetry(t)
 	geminiMaxAttempts = 1

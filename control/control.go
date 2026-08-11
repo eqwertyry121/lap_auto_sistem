@@ -36,6 +36,11 @@ type RuntimeHealthProvider interface {
 	LastBackupOK() time.Time
 	GeminiCallsToday() int
 	GeminiDailyLimit() int
+	GeminiPromptTokensToday() int64
+	GeminiOutputTokensToday() int64
+	GeminiTotalTokensToday() int64
+	GeminiEstimatedCostUSD() float64
+	GeminiDailyBudgetUSD() float64
 	GeminiCircuitUntil() time.Time
 	SchemaVersion() int
 	BuildVersion() string
@@ -260,6 +265,10 @@ func (p *Panel) status(ctx context.Context) {
 		fmt.Fprintf(&b, "detail_ok: %s\n", runtimeAge(now, p.health.LastDetailOK()))
 		fmt.Fprintf(&b, "gemini_ok: %s\n", runtimeAge(now, p.health.LastGeminiOK()))
 		fmt.Fprintf(&b, "gemini_calls: %s\n", geminiCallsStatus(p.health.GeminiCallsToday(), p.health.GeminiDailyLimit()))
+		fmt.Fprintf(&b, "gemini_tokens: in=%d out=%d total=%d\n",
+			p.health.GeminiPromptTokensToday(), p.health.GeminiOutputTokensToday(), p.health.GeminiTotalTokensToday())
+		fmt.Fprintf(&b, "gemini_cost_est: %s\n",
+			geminiCostStatus(p.health.GeminiEstimatedCostUSD(), p.health.GeminiDailyBudgetUSD()))
 		if until := p.health.GeminiCircuitUntil(); until.After(now) {
 			fmt.Fprintf(&b, "gemini_circuit: %s\n", runtimeRemaining(now, until))
 		}
@@ -397,6 +406,23 @@ func geminiCallsStatus(callsToday, dailyLimit int) string {
 		return fmt.Sprintf("%d/%d", callsToday, dailyLimit)
 	}
 	return fmt.Sprintf("%d/unlimited", callsToday)
+}
+
+func geminiCostStatus(costUSD, budgetUSD float64) string {
+	if budgetUSD > 0 {
+		return fmt.Sprintf("%s/%s", formatUSDControl(costUSD), formatUSDControl(budgetUSD))
+	}
+	return formatUSDControl(costUSD)
+}
+
+func formatUSDControl(v float64) string {
+	if v < 0 {
+		v = 0
+	}
+	if v < 0.01 {
+		return fmt.Sprintf("$%.6f", v)
+	}
+	return fmt.Sprintf("$%.4f", v)
 }
 
 func nonEmptyCtl(s, fallback string) string {

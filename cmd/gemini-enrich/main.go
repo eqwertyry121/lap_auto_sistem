@@ -89,7 +89,9 @@ func main() {
 	}
 	log.Info("кандидаты выбраны", "лотов", len(cands), "бюджет", *budget)
 
-	gem := vision.NewGeminiClient(cfg.GeminiAPIKey, cfg.GeminiTextModel).SetLimits(cfg.GeminiConcurrency, cfg.GeminiDailyLimit)
+	gem := vision.NewGeminiClient(cfg.GeminiAPIKey, cfg.GeminiTextModel).
+		SetLimits(cfg.GeminiConcurrency, cfg.GeminiDailyLimit).
+		SetDailyBudgetUSD(cfg.GeminiDailyBudgetUSD)
 	var recognized, attempts int
 	for _, c := range cands {
 		if ctx.Err() != nil {
