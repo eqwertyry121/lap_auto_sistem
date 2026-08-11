@@ -88,3 +88,47 @@ func LoadGPUs(ctx context.Context, path string) (map[string]GPU, error) {
 	}
 	return out, rows.Err()
 }
+
+// MatchGPU ищет эталонную видеокарту по короткому токену из объявления.
+// Ноутбучные варианты (Mobile/Laptop) разрешены и предпочитаются, но
+// модификаторы вроде Ti/Super/Max-Q не подмешиваются к базовой модели.
+func MatchGPU(gpus map[string]GPU, token string) (GPU, bool) {
+	if strings.TrimSpace(token) == "" || gpus == nil {
+		return GPU{}, false
+	}
+	tok := Key(token)
+	if g, ok := gpus[tok]; ok {
+		return g, true
+	}
+	var best GPU
+	bestClass, bestExtra, found := 3, 99, false
+	for k, g := range gpus {
+		if !strings.Contains(k, tok) {
+			continue
+		}
+		extra := strings.Fields(strings.TrimSpace(strings.Replace(k, tok, "", 1)))
+		bad, isMobile := false, false
+		for _, w := range extra {
+			switch w {
+			case "mobile", "laptop", "gpu":
+				isMobile = true
+			case "m":
+				// Some Quadro K-series entries are stored as K2100M while KP
+				// titles often omit the final M.
+			default:
+				bad = true
+			}
+		}
+		if bad {
+			continue
+		}
+		class := 1
+		if isMobile {
+			class = 0
+		}
+		if !found || class < bestClass || (class == bestClass && len(extra) < bestExtra) {
+			best, bestClass, bestExtra, found = g, class, len(extra), true
+		}
+	}
+	return best, found
+}

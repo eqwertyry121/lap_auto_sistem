@@ -210,7 +210,7 @@ func writeBack(ctx context.Context, db *sql.DB, adID int64, sp geminiSpecs,
 	}
 	gpuModel, gpuScore := strings.TrimSpace(sp.GPU), 0.0
 	if gpuModel != "" {
-		if g, ok := gpus[hw.Key(gpuModel)]; ok {
+		if g, ok := hw.MatchGPU(gpus, gpuModel); ok {
 			gpuModel, gpuScore = g.Name, g.Score
 		}
 	}

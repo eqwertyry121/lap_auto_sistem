@@ -134,20 +134,10 @@ func matchCPU(ref map[string]hw.CPU, name string) (float64, string) {
 }
 
 func matchGPU(ref map[string]hw.GPU, name string) (float64, string) {
-	key := hw.Key(name)
-	if g, ok := ref[key]; ok {
-		return g.Score, key
+	if g, ok := hw.MatchGPU(ref, name); ok {
+		return g.Score, hw.Key(g.Name)
 	}
-	var best float64
-	var bestKey string
-	for k, g := range ref {
-		if strings.Contains(k, key) || strings.Contains(key, k) {
-			if bestKey == "" || len(k) > len(bestKey) {
-				best, bestKey = g.Score, k
-			}
-		}
-	}
-	return best, bestKey
+	return 0, ""
 }
 
 func orDash(s string) string {

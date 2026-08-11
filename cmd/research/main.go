@@ -724,33 +724,5 @@ func cpuLookupKeys(name string) []string {
 // варианты (Mobile/Laptop) в приоритете; «RTX 3060» не должен сматчиться
 // в «RTX 3060 Ti» — лишние слова-модификаторы запрещены.
 func matchGPU(gpus map[string]hw.GPU, token string) (hw.GPU, bool) {
-	tok := strings.ToLower(token)
-	var best hw.GPU
-	bestClass, bestExtra, found := 2, 99, false
-	for k, g := range gpus {
-		if !strings.Contains(k, tok) {
-			continue
-		}
-		extra := strings.Fields(strings.TrimSpace(strings.Replace(k, tok, "", 1)))
-		bad, isMobile := false, false
-		for _, w := range extra {
-			switch w {
-			case "mobile", "laptop", "gpu":
-				isMobile = true
-			default:
-				bad = true // модификатор (ti, super…) — не наш токен
-			}
-		}
-		if bad {
-			continue
-		}
-		class := 1 // desktop
-		if isMobile {
-			class = 0
-		}
-		if !found || class < bestClass || (class == bestClass && len(extra) < bestExtra) {
-			best, bestClass, bestExtra, found = g, class, len(extra), true
-		}
-	}
-	return best, found
+	return hw.MatchGPU(gpus, token)
 }

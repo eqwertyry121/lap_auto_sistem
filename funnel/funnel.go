@@ -815,7 +815,7 @@ func matchGPU(gpus map[string]hw.GPU, name string) (string, float64) {
 	if name == "" || gpus == nil {
 		return name, 0
 	}
-	if g, ok := gpus[hw.Key(name)]; ok {
+	if g, ok := hw.MatchGPU(gpus, name); ok {
 		return g.Name, g.Score
 	}
 	return name, 0

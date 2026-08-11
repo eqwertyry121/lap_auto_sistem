@@ -93,8 +93,13 @@ func TestExtractGPU(t *testing.T) {
 		{"Lenovo P16v Ultra 7 165H 64gb ddr5 1Tb nvm rtx 500 ada 4gb", "RTX 500 Ada"},
 		{"DELL Pro Max Premium 14 U7 265H 32GB 1TB RTX PRO 1000 8GB", "RTX PRO 1000"},
 		{"HP ZBook Fury G1i 16 Ultra 9 RTX PRO 4000 Blackwell", "RTX PRO 4000"},
-		{"Lenovo ThinkPad T490 i5-8265U 8GB", ""}, // T490 — модель ноутбука, не GPU
-		{"Lenovo ThinkPad T14 Gen 2 16GB", ""},    // T14 — не GPU
+		{"Lenovo Thinkpad P52/15.6 IPS/I7-8850H/32/512/P2000 4GB", "Quadro P2000"},
+		{"Dell Precision 7520 - i7-6820HQ/32Gb/480Gb/M1200 4Gb/FHD", "Quadro M1200"},
+		{"Dell M6800 i7-4810QM/32gbddr3/K4100 4GB DDR5", "Quadro K4100M"},
+		{"Laptop Lenovo ThinkPad P15 Gen2 i7 11th/32GB/1TB/A2000 4GB", "RTX A2000"},
+		{"Lenovo ThinkPad T490 i5-8265U 8GB", ""},       // T490 — модель ноутбука, не GPU
+		{"Lenovo ThinkPad T14 Gen 2 16GB", ""},          // T14 — не GPU
+		{"Lenovo ThinkPad P52 i7-8850H 32GB 512GB", ""}, // P52 — модель ноутбука, не GPU
 	}
 	for _, c := range cases {
 		if got := ExtractGPU(c.text); got != c.want {

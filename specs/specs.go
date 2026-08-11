@@ -200,10 +200,14 @@ var (
 	gpuRTXARe   = regexp.MustCompile(`(?i)\brtx\s?-?\s?a(\d{4})\b`)
 	gpuRTXProRe = regexp.MustCompile(`(?i)\brtx\s?pro\s?(\d{3,4})\b`)
 	// Ada-поколение рабочих GPU: «RTX 500 Ada», «RTX 2000 Ada», …
-	gpuRTXAdaRe = regexp.MustCompile(`(?i)\brtx\s?(\d{3})\s?ada\b`)
-	gpuAMDRe    = regexp.MustCompile(`(?i)\brx\s?-?\s?(\d{4})\s?(xtx|xt|m)?\b`)
-	gpuMXRe     = regexp.MustCompile(`(?i)\bmx\s?-?\s?(\d{3})\b`)
-	gpuQuadroRe = regexp.MustCompile(`(?i)\bquadro\s?([a-z]?\d{3,4}[a-z]?)\b`)
+	gpuRTXAdaRe   = regexp.MustCompile(`(?i)\brtx\s?(\d{3})\s?ada\b`)
+	gpuAMDRe      = regexp.MustCompile(`(?i)\brx\s?-?\s?(\d{4})\s?(xtx|xt|m)?\b`)
+	gpuMXRe       = regexp.MustCompile(`(?i)\bmx\s?-?\s?(\d{3})\b`)
+	gpuQuadroRe   = regexp.MustCompile(`(?i)\bquadro\s?([a-z]?\d{3,4}[a-z]?)\b`)
+	gpuBareRTXARe = regexp.MustCompile(`(?i)\ba([1-5]000)\b`)
+	gpuBareKRe    = regexp.MustCompile(`(?i)\bk(610|620|1000|1100|2000|2100|3000|3100|4000|4100|5000|5100)m?\b`)
+	gpuBareMRe    = regexp.MustCompile(`(?i)\bm(500|520|600|620|1000|1200|2000|2200|3000|4000|5000)m?\b`)
+	gpuBarePRe    = regexp.MustCompile(`(?i)\bp(500|600|620|1000|2000|3000|3200|4000|5000)\b`)
 	// T-series без префикса: только ≥1000, чтобы не цеплять ThinkPad T4xx/T5xx.
 	gpuTSeriesRe   = regexp.MustCompile(`(?i)\bT(1000|1200|2000)\b`)
 	gpuRadeonProRe = regexp.MustCompile(`(?i)\bradeon\s?pro\s?(\d{4}[a-z]?)\b`)
@@ -243,6 +247,18 @@ func ExtractGPU(text string) string {
 	}
 	if m := gpuQuadroRe.FindStringSubmatch(text); m != nil {
 		return "Quadro " + strings.ToUpper(m[1])
+	}
+	if m := gpuBareRTXARe.FindStringSubmatch(text); m != nil {
+		return "RTX A" + m[1]
+	}
+	if m := gpuBareKRe.FindStringSubmatch(text); m != nil {
+		return "Quadro K" + m[1] + "M"
+	}
+	if m := gpuBareMRe.FindStringSubmatch(text); m != nil {
+		return "Quadro M" + strings.ToUpper(m[1])
+	}
+	if m := gpuBarePRe.FindStringSubmatch(text); m != nil {
+		return "Quadro P" + m[1]
 	}
 	if m := gpuTSeriesRe.FindStringSubmatch(text); m != nil {
 		return "T" + m[1]
