@@ -27,6 +27,9 @@ func TestDefaultConfigValidates(t *testing.T) {
 	if cfg.PollInterval != 45*time.Second {
 		t.Fatalf("PollInterval = %s", cfg.PollInterval)
 	}
+	if cfg.DBBackupDir != "data/backups" {
+		t.Fatalf("DBBackupDir = %q", cfg.DBBackupDir)
+	}
 }
 
 func TestConfigRejectsInvalidEnvValues(t *testing.T) {

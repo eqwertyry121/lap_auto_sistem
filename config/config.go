@@ -13,6 +13,7 @@ import (
 type Config struct {
 	PollInterval time.Duration
 	DBPath       string
+	DBBackupDir  string
 	FetchDelay   time.Duration
 
 	GeminiAPIKey      string
@@ -76,6 +77,7 @@ func loadWithEnv(r *envReader) *Config {
 	cfg := &Config{
 		PollInterval:      r.durationSec("POLL_INTERVAL_SEC", 45),
 		DBPath:            r.str("DB_PATH", "data/kp_bot.db"),
+		DBBackupDir:       r.str("DB_BACKUP_DIR", "data/backups"),
 		FetchDelay:        time.Duration(r.int("FETCH_DELAY_MS", 700)) * time.Millisecond,
 		GeminiAPIKey:      r.raw("GEMINI_API_KEY"),
 		GeminiModel:       baseGeminiModel,
@@ -167,8 +169,8 @@ func (c *Config) Validate() error {
 	if (c.TelegramToken == "") != (c.TelegramChatID == "") {
 		return fmt.Errorf("TELEGRAM_BOT_TOKEN and TELEGRAM_CHAT_ID must be set together")
 	}
-	if strings.TrimSpace(c.DBPath) == "" || strings.TrimSpace(c.ResearchDBPath) == "" {
-		return fmt.Errorf("DB_PATH and RESEARCH_DB_PATH must be non-empty")
+	if strings.TrimSpace(c.DBPath) == "" || strings.TrimSpace(c.DBBackupDir) == "" || strings.TrimSpace(c.ResearchDBPath) == "" {
+		return fmt.Errorf("DB_PATH, DB_BACKUP_DIR and RESEARCH_DB_PATH must be non-empty")
 	}
 	if strings.TrimSpace(c.CSVPath) == "" || strings.TrimSpace(c.HeartbeatPath) == "" || strings.TrimSpace(c.LockPath) == "" {
 		return fmt.Errorf("CSV_PATH, HEARTBEAT_PATH and LOCK_PATH must be non-empty")

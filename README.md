@@ -75,6 +75,7 @@ go run .
 |---|---|---|
 | `POLL_INTERVAL_SEC` | `45` | период опроса Search API |
 | `DB_PATH` | `data/kp_bot.db` | файл SQLite (SSOT) |
+| `DB_BACKUP_DIR` | `data/backups` | daily SQLite backups via `VACUUM INTO` |
 | `FETCH_DELAY_MS` | `700` | пауза между запросами `/eds/{id}` |
 | `GEMINI_API_KEY` | — | **обязателен** для оценки |
 | `GEMINI_MODEL` | `gemini-2.5-flash-lite` | базовая модель Gemini |

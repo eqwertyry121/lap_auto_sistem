@@ -107,6 +107,7 @@ func main() {
 	tg := notifier.New(cfg.TelegramToken, cfg.TelegramChatID)
 	kp := collector.NewClient()
 	go telegramOutboxLoop(ctx, store, tg, log)
+	go dbBackupLoop(ctx, cfg, store, log)
 
 	var csvExp *exporter.CSVExporter
 	if exp, err := exporter.NewCSV(cfg.CSVPath); err == nil {
@@ -233,6 +234,31 @@ func digestLoop(ctx context.Context, cfg *config.Config, store *storage.Store,
 			sendDigest(ctx, cfg, store, tg, st, log)
 			next = nextDigestTime(time.Now(), h, m)
 		}
+	}
+}
+
+func dbBackupLoop(ctx context.Context, cfg *config.Config, store *storage.Store, log *slog.Logger) {
+	runDBBackup(ctx, cfg, store, log)
+	t := time.NewTicker(time.Hour)
+	defer t.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-t.C:
+			runDBBackup(ctx, cfg, store, log)
+		}
+	}
+}
+
+func runDBBackup(ctx context.Context, cfg *config.Config, store *storage.Store, log *slog.Logger) {
+	res, err := store.BackupDaily(ctx, cfg.DBBackupDir, time.Now())
+	if err != nil {
+		log.Error("sqlite backup failed", "dir", cfg.DBBackupDir, "err", err)
+		return
+	}
+	if res.Created {
+		log.Info("sqlite backup created", "path", res.Path)
 	}
 }
 

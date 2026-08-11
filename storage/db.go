@@ -17,7 +17,8 @@ import (
 // Store — единая точка доступа к БД (SSOT). SQLite на MVP, при переезде
 // на PostgreSQL меняется только этот файл (драйвер и плейсхолдеры).
 type Store struct {
-	db *sql.DB
+	db   *sql.DB
+	path string
 }
 
 const schema = `
@@ -94,7 +95,7 @@ func Open(path string) (*Store, error) {
 		db.Close()
 		return nil, err
 	}
-	return &Store{db: db}, nil
+	return &Store{db: db, path: path}, nil
 }
 
 // migrateListingAudit — колонки аудита вердиктов воронки (PLAN_v4 §4.4).
