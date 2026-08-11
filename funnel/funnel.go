@@ -1058,10 +1058,54 @@ func specsScoreLine(laptop, cpu string, cpuScore float64, ram, ssd int, gpu stri
 	return strings.Join(parts, " · ")
 }
 
+func appendMarketEvaluation(b *strings.Builder, est pricing.PriceEstimate, dev float64, eval pricing.MarketEvaluation) {
+	comparable := eval.ComparableMedian
+	if comparable <= 0 {
+		comparable = est.RawMedian
+	}
+	if comparable <= 0 {
+		comparable = est.Median
+	}
+	confidence := strings.TrimSpace(eval.Confidence)
+	if confidence == "" {
+		confidence = "UNKNOWN"
+	}
+	fmt.Fprintf(b, "Рынок KP: медиана сопоставимых €%.0f", comparable)
+	if eval.ComparableP25 > 0 {
+		fmt.Fprintf(b, " · нижний квартиль €%.0f", eval.ComparableP25)
+	}
+	fmt.Fprintf(b, " · n=%d · confidence=%s\n", est.N, confidence)
+	appendOpportunityCeiling(b, est, eval)
+	fmt.Fprintf(b, "Ориентир для решения: €%.0f · отклонение <b>%.0f%%</b>\n", est.Median, dev*100)
+}
+
+func appendOpportunityCeiling(b *strings.Builder, est pricing.PriceEstimate, eval pricing.MarketEvaluation) bool {
+	ceiling, by, ok := marketCeiling(est, eval)
+	if !ok {
+		return false
+	}
+	fmt.Fprintf(b, "Рациональный потолок: €%.0f по более сильному лоту: %s · €%.0f · %.0f баллов\n",
+		ceiling, html.EscapeString(truncateRunes(by.Title, 80)), by.Price, by.Composite())
+	fmt.Fprintf(b, "↪ %s\n", html.EscapeString(by.URL))
+	return true
+}
+
+func marketCeiling(est pricing.PriceEstimate, eval pricing.MarketEvaluation) (float64, *pricing.Lot, bool) {
+	ceiling := eval.OpportunityCeiling
+	by := eval.OpportunityBy
+	if by == nil {
+		by = eval.DominatedBy
+	}
+	if (ceiling <= 0 || by == nil) && est.Capped() {
+		ceiling = est.CompetitiveCap
+		by = est.CapLot
+	}
+	return ceiling, by, ceiling > 0 && by != nil && by.URL != ""
+}
+
 // valueAlertText — алерт-досье кандидата в низу рынка (PLAN_v6):
-// 💎 DIAMOND / 💎❓ SUSPECT. Только цифры, без прилагательных: средняя цена
-// (НАШИ данные KP), баллы кандидата, «шаг вверх» (ближайший мощнее и дороже)
-// и сколько он стоит за единицу мощности.
+// 💎 DIAMOND / 💎❓ SUSPECT. Только цифры, без прилагательных: медиана сопоставимых
+// KP-лотов, нижний квартиль, рациональный потолок, баллы кандидата и «шаг вверх».
 func valueAlertText(code string, ad models.SearchAd, specsScore string, lot pricing.Lot,
 	est pricing.PriceEstimate, dev float64, nuance string, stepUp *pricing.Lot, eval pricing.MarketEvaluation) string {
 	var b strings.Builder
@@ -1075,26 +1119,7 @@ func valueAlertText(code string, ad models.SearchAd, specsScore string, lot pric
 	fmt.Fprintf(&b, "Железо: %s\n", html.EscapeString(specsScore))
 	fmt.Fprintf(&b, "Мощность: %.0f баллов · %.0f баллов/€1000\n", lot.Composite(), lot.ValuePer1000())
 	fmt.Fprintf(&b, "Цена: <b>€%.0f</b>\n", lot.Price)
-	if est.Capped() && est.CapLot != nil && est.CapLot.URL != "" {
-		fmt.Fprintf(&b, "Рыночный ориентир: €%.0f (сырая медиана €%.0f, n=%d; потолок по более мощному лоту)\n",
-			est.Median, est.RawMedian, est.N)
-		fmt.Fprintf(&b, "Контраргумент: %s · €%.0f · %.0f баллов\n",
-			html.EscapeString(truncateRunes(est.CapLot.Title, 80)), est.CapLot.Price, est.CapLot.Composite())
-		fmt.Fprintf(&b, "↪ %s\n", html.EscapeString(est.CapLot.URL))
-		fmt.Fprintf(&b, "Отклонение: <b>%.0f%%</b>\n", dev*100)
-	} else {
-		fmt.Fprintf(&b, "Рыночный ориентир (наши данные KP): €%.0f (n=%d) · отклонение <b>%.0f%%</b>\n",
-			est.Median, est.N, dev*100)
-	}
-	ceilingBy := eval.OpportunityBy
-	if ceilingBy == nil {
-		ceilingBy = eval.DominatedBy
-	}
-	if eval.OpportunityCeiling > 0 && ceilingBy != nil && ceilingBy.URL != "" {
-		fmt.Fprintf(&b, "Opportunity ceiling: €%.0f by stronger lot %s · €%.0f · %.0f points\n",
-			eval.OpportunityCeiling, html.EscapeString(truncateRunes(ceilingBy.Title, 80)), ceilingBy.Price, ceilingBy.Composite())
-		fmt.Fprintf(&b, "↪ %s\n", html.EscapeString(ceilingBy.URL))
-	}
+	appendMarketEvaluation(&b, est, dev, eval)
 	if nuance != "" {
 		fmt.Fprintf(&b, "✅ Хороший, но с нюансом: %s\n", html.EscapeString(nuance))
 	}
@@ -1151,26 +1176,13 @@ func checkAlertText(ad models.SearchAd, priceEUR float64, specsScore string,
 	fmt.Fprintf(&b, "<b>%s</b>\n", html.EscapeString(truncateRunes(ad.Name, 90)))
 	fmt.Fprintf(&b, "Железо: %s\n", html.EscapeString(specsScore))
 	fmt.Fprintf(&b, "Цена: €%.0f\n", priceEUR)
-	ceilingBy := eval.OpportunityBy
-	if ceilingBy == nil {
-		ceilingBy = eval.DominatedBy
-	}
-	if eval.OpportunityCeiling > 0 && ceilingBy != nil && ceilingBy.URL != "" {
-		fmt.Fprintf(&b, "Opportunity ceiling: €%.0f by stronger lot %s · €%.0f · %.0f points\n",
-			eval.OpportunityCeiling, html.EscapeString(truncateRunes(ceilingBy.Title, 80)), ceilingBy.Price, ceilingBy.Composite())
-		fmt.Fprintf(&b, "↪ %s\n", html.EscapeString(ceilingBy.URL))
-	}
 	if cpuNoScore {
 		b.WriteString("ℹ️ CPU нет в эталоне мощности: сверь поколение сам.\n")
 	}
 	if devOK {
-		if est.Capped() && est.CapLot != nil && est.CapLot.URL != "" {
-			fmt.Fprintf(&b, "Рыночный ориентир: €%.0f (сырая медиана €%.0f, n=%d; потолок по более мощному лоту), отклонение %.0f%%\n",
-				est.Median, est.RawMedian, est.N, dev*100)
-			fmt.Fprintf(&b, "Контраргумент: %s\n", html.EscapeString(est.CapLot.URL))
-		} else {
-			fmt.Fprintf(&b, "Рыночный ориентир (наши данные KP): €%.0f (n=%d), отклонение %.0f%%\n", est.Median, est.N, dev*100)
-		}
+		appendMarketEvaluation(&b, est, dev, eval)
+	} else {
+		appendOpportunityCeiling(&b, est, eval)
 	}
 	if nuance != "" {
 		fmt.Fprintf(&b, "Нюанс: %s\n", html.EscapeString(nuance))

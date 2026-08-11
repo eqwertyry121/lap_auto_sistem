@@ -177,6 +177,49 @@ func TestWithoutProductionOLSKeepsAlternatives(t *testing.T) {
 	}
 }
 
+func TestValueAlertTextSeparatesComparableMarketAndCeiling(t *testing.T) {
+	stronger := pricing.Lot{
+		AdID: 2, Title: "Stronger Lenovo", URL: "https://example.test/stronger",
+		Price: 110, CPUScore: 14000, GPUScore: 8000,
+	}
+	lot := pricing.Lot{
+		AdID: 1, Title: "Target Dell", URL: "https://example.test/target",
+		Price: 100, CPUScore: 5000, GPUScore: 3000,
+	}
+	est := pricing.PriceEstimate{
+		Median: 110, RawMedian: 250, P25: 180, N: 12, Level: "K0",
+		CompetitiveCap: 110, CapLot: &stronger,
+	}
+	eval := pricing.MarketEvaluation{
+		Estimate:           est,
+		ComparableMedian:   250,
+		ComparableP25:      180,
+		OpportunityCeiling: 110,
+		OpportunityBy:      &stronger,
+		Confidence:         "HIGH",
+	}
+	ad := models.SearchAd{AdID: 1, Name: "Target Dell", AdURL: "/target"}
+
+	text := valueAlertText(vcDiamond, ad, "i7 · 16GB · SSD 512GB", lot, est, -0.09, "", nil, eval)
+	for _, want := range []string{
+		"медиана сопоставимых €250",
+		"нижний квартиль €180",
+		"confidence=HIGH",
+		"Рациональный потолок: €110",
+		"https://example.test/stronger",
+		"Ориентир для решения: €110",
+	} {
+		if !strings.Contains(text, want) {
+			t.Fatalf("alert text missing %q:\n%s", want, text)
+		}
+	}
+	for _, forbidden := range []string{"Opportunity ceiling", "Рыночный ориентир (наши данные KP)"} {
+		if strings.Contains(text, forbidden) {
+			t.Fatalf("alert text contains old wording %q:\n%s", forbidden, text)
+		}
+	}
+}
+
 func TestCachedGeminiSpecsMergePartialStages(t *testing.T) {
 	dbPath := newSpecsCacheDB(t)
 	ctx := context.Background()
