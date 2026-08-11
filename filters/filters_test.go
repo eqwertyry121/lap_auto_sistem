@@ -92,6 +92,11 @@ func TestL1_SellerHistoryAndName(t *testing.T) {
 	if v := L1(AdFacts{Title: "Laptop i5", Seller: "Laptop Centar NS"}); v.Class != ClassShop {
 		t.Errorf("коммерческое имя продавца должно резать: %s (%v)", v.Class, v.Reasons)
 	}
+	for _, seller := range []string{"Pc Komponente Servis Računara", "Pc&Tehnika", "Western Europe"} {
+		if v := L1(AdFacts{Title: "Laptop i5", Seller: seller}); v.Class != ClassShop {
+			t.Errorf("коммерческое имя продавца %q должно резать: %s (%v)", seller, v.Class, v.Reasons)
+		}
+	}
 }
 
 func TestL1_ManualSellerLabels(t *testing.T) {
@@ -119,6 +124,19 @@ func TestL1_ResellerMulticity(t *testing.T) {
 	joined := strings.Join(v.Reasons, "; ")
 	if !strings.Contains(joined, "М7") {
 		t.Errorf("среди причин нет М7 (мультигород): %v", v.Reasons)
+	}
+}
+
+const westernEuropeTemplate = `Clanovi sa 0 ocena, bez upisanog broja telefona, moraju pozvati, na poruke putem Kupujem Prodajem ne odgovaramo! Pozovite i pitajte sve sto vas interesuje ▶️Western Europe◀️ Microsoft Surface Laptop 3 Top fabricko stanje -Intel i5-1035G7 -8gb ddr4 -256gb SSD NVMe perfektan`
+
+func TestL1_WesternEuropeTemplate(t *testing.T) {
+	v := L1(AdFacts{Title: "Surface Laptop 3 i5 8gb", Description: westernEuropeTemplate})
+	if v.Class != ClassShop {
+		t.Fatalf("шаблон Western Europe не распознан: %s (%v)", v.Class, v.Reasons)
+	}
+	joined := strings.Join(v.Reasons, "; ")
+	if !strings.Contains(joined, "bez upisanog broja telefona") || !strings.Contains(joined, "ne odgovaramo") {
+		t.Errorf("причины не показывают шаблон связи: %v", v.Reasons)
 	}
 }
 
