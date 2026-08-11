@@ -63,7 +63,7 @@ func TestOpenRecordsSchemaMigrationVersion(t *testing.T) {
 	).Scan(&name, &appliedAt); err != nil {
 		t.Fatalf("read schema migration: %v", err)
 	}
-	if name != "storage-main" {
+	if name != "storage-main-v2" {
 		t.Fatalf("migration name = %q", name)
 	}
 	if appliedAt <= 0 {
@@ -104,6 +104,114 @@ func TestDiscoveredListingCanBeClaimedAfterExistingRow(t *testing.T) {
 	}
 	if byState[string(models.ProcessDetailPending)] != 1 {
 		t.Fatalf("process states = %+v, want one DETAIL_PENDING", byState)
+	}
+}
+
+func TestUpsertDiscoveredRecordsObservationHistoryAndPriceChanges(t *testing.T) {
+	ctx := context.Background()
+	st := openTestStore(t)
+	firstSeen := time.Unix(1000, 0)
+	lastSeen := time.Unix(2000, 0)
+	l := models.Listing{
+		AdID: 10, Title: "Dell Latitude 3510 i7", Price: 200, Currency: "eur", URL: "https://kp/10",
+		CreatedAt: firstSeen,
+	}
+	if err := st.UpsertDiscovered(ctx, l); err != nil {
+		t.Fatalf("upsert discovered: %v", err)
+	}
+	l.Price = 220
+	l.CreatedAt = lastSeen
+	if err := st.UpsertDiscovered(ctx, l); err != nil {
+		t.Fatalf("second upsert discovered: %v", err)
+	}
+
+	count, err := st.ObservationCount(ctx, 10)
+	if err != nil {
+		t.Fatalf("observation count: %v", err)
+	}
+	if count != 2 {
+		t.Fatalf("observation count = %d, want 2", count)
+	}
+	lifecycle, err := st.ListingLifecycle(ctx, 10)
+	if err != nil {
+		t.Fatalf("listing lifecycle: %v", err)
+	}
+	if lifecycle.FirstSeen.Unix() != firstSeen.Unix() || lifecycle.LastSeen.Unix() != lastSeen.Unix() {
+		t.Fatalf("lifecycle seen range = %d..%d, want %d..%d",
+			lifecycle.FirstSeen.Unix(), lifecycle.LastSeen.Unix(), firstSeen.Unix(), lastSeen.Unix())
+	}
+	if lifecycle.LastPrice != 220 || lifecycle.LastCurrency != "EUR" {
+		t.Fatalf("last price = %.0f %s, want 220 EUR", lifecycle.LastPrice, lifecycle.LastCurrency)
+	}
+	if lifecycle.SeenCount != 2 || lifecycle.PriceChangeCount != 1 {
+		t.Fatalf("seen=%d price_changes=%d, want 2 and 1", lifecycle.SeenCount, lifecycle.PriceChangeCount)
+	}
+	if lifecycle.LastFingerprint == "" {
+		t.Fatal("empty listing fingerprint")
+	}
+}
+
+func TestUpdateDetailsRecordsDetailObservation(t *testing.T) {
+	ctx := context.Background()
+	st := openTestStore(t)
+	l := models.Listing{
+		AdID: 11, Title: "Lenovo ThinkPad E14 Gen 6", Price: 680, Currency: "EUR", URL: "https://kp/11",
+		CreatedAt: time.Unix(1000, 0),
+	}
+	if err := st.UpsertDiscovered(ctx, l); err != nil {
+		t.Fatalf("upsert discovered: %v", err)
+	}
+	if err := st.UpdateDetails(ctx, 11, "Ryzen 7, 16GB, 512GB", "Marko", 682, "eur"); err != nil {
+		t.Fatalf("update details: %v", err)
+	}
+
+	count, err := st.ObservationCount(ctx, 11)
+	if err != nil {
+		t.Fatalf("observation count: %v", err)
+	}
+	if count != 2 {
+		t.Fatalf("observation count = %d, want 2", count)
+	}
+	lifecycle, err := st.ListingLifecycle(ctx, 11)
+	if err != nil {
+		t.Fatalf("listing lifecycle: %v", err)
+	}
+	if lifecycle.LastPrice != 682 || lifecycle.PriceChangeCount != 1 || lifecycle.LastCurrency != "EUR" {
+		t.Fatalf("lifecycle after detail = %+v, want price 682 EUR and one price change", lifecycle)
+	}
+}
+
+func TestListingLifecycleDetectsPotentialRelistFingerprint(t *testing.T) {
+	ctx := context.Background()
+	st := openTestStore(t)
+	first := models.Listing{
+		AdID: 21, Title: "Dell Latitude 3510 i7-10510U Nvidia MX230", Price: 210, Currency: "EUR", URL: "https://kp/21",
+		CreatedAt: time.Unix(1000, 0),
+	}
+	second := models.Listing{
+		AdID: 22, Title: "Dell Latitude 3510 i7 10510U NVIDIA MX230", Price: 200, Currency: "EUR", URL: "https://kp/22",
+		CreatedAt: time.Unix(2000, 0),
+	}
+	if err := st.UpsertDiscovered(ctx, first); err != nil {
+		t.Fatalf("upsert first: %v", err)
+	}
+	if err := st.UpsertDiscovered(ctx, second); err != nil {
+		t.Fatalf("upsert second: %v", err)
+	}
+	firstLifecycle, err := st.ListingLifecycle(ctx, 21)
+	if err != nil {
+		t.Fatalf("first lifecycle: %v", err)
+	}
+	secondLifecycle, err := st.ListingLifecycle(ctx, 22)
+	if err != nil {
+		t.Fatalf("second lifecycle: %v", err)
+	}
+	if firstLifecycle.LastFingerprint == "" || firstLifecycle.LastFingerprint != secondLifecycle.LastFingerprint {
+		t.Fatalf("fingerprints = %q and %q, want same non-empty fingerprint",
+			firstLifecycle.LastFingerprint, secondLifecycle.LastFingerprint)
+	}
+	if secondLifecycle.RelistCount != 1 {
+		t.Fatalf("second relist count = %d, want 1", secondLifecycle.RelistCount)
 	}
 }
 

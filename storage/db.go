@@ -2,12 +2,15 @@ package storage
 
 import (
 	"context"
+	"crypto/sha1"
 	"database/sql"
+	"encoding/hex"
 	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
 	"time"
+	"unicode"
 
 	_ "modernc.org/sqlite"
 
@@ -21,7 +24,7 @@ type Store struct {
 	path string
 }
 
-const storageSchemaVersion = 1
+const storageSchemaVersion = 2
 
 const schema = `
 CREATE TABLE IF NOT EXISTS schema_migrations (
@@ -56,6 +59,34 @@ CREATE TABLE IF NOT EXISTS market_listings (
 CREATE INDEX IF NOT EXISTS idx_ml_status  ON market_listings(status);
 CREATE INDEX IF NOT EXISTS idx_ml_synced  ON market_listings(synced_to_sheets);
 CREATE INDEX IF NOT EXISTS idx_ml_created ON market_listings(created_at);
+
+CREATE TABLE IF NOT EXISTS listing_observations (
+	id           INTEGER PRIMARY KEY AUTOINCREMENT,
+	ad_id        INTEGER NOT NULL DEFAULT 0,
+	observed_at  INTEGER NOT NULL DEFAULT 0,
+	price        REAL NOT NULL DEFAULT 0,
+	currency     TEXT NOT NULL DEFAULT 'EUR',
+	title        TEXT NOT NULL DEFAULT '',
+	url          TEXT NOT NULL DEFAULT '',
+	fingerprint  TEXT NOT NULL DEFAULT '',
+	source       TEXT NOT NULL DEFAULT ''
+);
+CREATE INDEX IF NOT EXISTS idx_lo_ad_time ON listing_observations(ad_id, observed_at);
+CREATE INDEX IF NOT EXISTS idx_lo_fingerprint ON listing_observations(fingerprint);
+
+CREATE TABLE IF NOT EXISTS listing_lifecycle (
+	ad_id                INTEGER PRIMARY KEY,
+	first_seen           INTEGER NOT NULL DEFAULT 0,
+	last_seen            INTEGER NOT NULL DEFAULT 0,
+	last_price           REAL NOT NULL DEFAULT 0,
+	last_currency        TEXT NOT NULL DEFAULT '',
+	last_fingerprint     TEXT NOT NULL DEFAULT '',
+	seen_count           INTEGER NOT NULL DEFAULT 0,
+	price_change_count   INTEGER NOT NULL DEFAULT 0,
+	relist_count         INTEGER NOT NULL DEFAULT 0
+);
+CREATE INDEX IF NOT EXISTS idx_ll_last_seen ON listing_lifecycle(last_seen);
+CREATE INDEX IF NOT EXISTS idx_ll_fingerprint ON listing_lifecycle(last_fingerprint);
 
 CREATE TABLE IF NOT EXISTS telegram_outbox (
 	id              INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -122,7 +153,7 @@ func applyStorageSchema(db *sql.DB) error {
 	}
 	if _, err := tx.Exec(
 		`INSERT OR IGNORE INTO schema_migrations (version, name, applied_at) VALUES (?, ?, ?)`,
-		storageSchemaVersion, "storage-main", time.Now().Unix(),
+		storageSchemaVersion, "storage-main-v2", time.Now().Unix(),
 	); err != nil {
 		return fmt.Errorf("record schema migration: %w", err)
 	}
@@ -243,10 +274,24 @@ func (s *Store) Exists(ctx context.Context, adID int64) (bool, error) {
 
 // InsertListing пишет новый лот (INSERT OR IGNORE — повторная вставка не ошибка).
 func (s *Store) InsertListing(ctx context.Context, l models.Listing) error {
-	_, err := s.db.ExecContext(ctx,
+	if l.CreatedAt.IsZero() {
+		l.CreatedAt = time.Now()
+	}
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+
+	if _, err := tx.ExecContext(ctx,
 		`INSERT OR IGNORE INTO market_listings (ad_id, title, price, currency, url, status, created_at, process_state, next_attempt_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-		l.AdID, l.Title, l.Price, l.Currency, l.URL, string(l.Status), l.CreatedAt.Unix(), string(l.ProcessState), unixOrZero(l.NextAttemptAt))
-	return err
+		l.AdID, l.Title, l.Price, models.NormalizeCurrency(l.Currency), l.URL, string(l.Status), l.CreatedAt.Unix(), string(l.ProcessState), unixOrZero(l.NextAttemptAt)); err != nil {
+		return err
+	}
+	if err := recordListingObservationTx(ctx, tx, l, "search", l.CreatedAt); err != nil {
+		return err
+	}
+	return tx.Commit()
 }
 
 func (s *Store) SetStatus(ctx context.Context, adID int64, st models.Status) error {
@@ -270,9 +315,12 @@ func (s *Store) UpsertDiscovered(ctx context.Context, l models.Listing) error {
 		_, err = tx.ExecContext(ctx, `
 INSERT INTO market_listings (ad_id, title, price, currency, url, status, created_at, process_state, next_attempt_at, lease_until)
 VALUES (?, ?, ?, ?, ?, ?, ?, ?, 0, 0)`,
-			l.AdID, l.Title, l.Price, l.Currency, l.URL,
+			l.AdID, l.Title, l.Price, models.NormalizeCurrency(l.Currency), l.URL,
 			string(models.ProcessDetailPending), l.CreatedAt.Unix(), string(models.ProcessDetailPending))
 		if err != nil {
+			return err
+		}
+		if err := recordListingObservationTx(ctx, tx, l, "search", l.CreatedAt); err != nil {
 			return err
 		}
 		return tx.Commit()
@@ -284,7 +332,7 @@ VALUES (?, ?, ?, ?, ?, ?, ?, ?, 0, 0)`,
 	if listingClosed(status, state) {
 		_, err = tx.ExecContext(ctx,
 			`UPDATE market_listings SET title = ?, price = ?, currency = ?, url = ? WHERE ad_id = ?`,
-			l.Title, l.Price, l.Currency, l.URL, l.AdID)
+			l.Title, l.Price, models.NormalizeCurrency(l.Currency), l.URL, l.AdID)
 	} else {
 		nextState := state
 		if nextState == "" || nextState == string(models.ProcessDiscovered) {
@@ -298,9 +346,12 @@ VALUES (?, ?, ?, ?, ?, ?, ?, ?, 0, 0)`,
 UPDATE market_listings
 SET title = ?, price = ?, currency = ?, url = ?, status = ?, process_state = ?
 WHERE ad_id = ?`,
-			l.Title, l.Price, l.Currency, l.URL, nextStatus, nextState, l.AdID)
+			l.Title, l.Price, models.NormalizeCurrency(l.Currency), l.URL, nextStatus, nextState, l.AdID)
 	}
 	if err != nil {
+		return err
+	}
+	if err := recordListingObservationTx(ctx, tx, l, "search", l.CreatedAt); err != nil {
 		return err
 	}
 	return tx.Commit()
@@ -317,6 +368,131 @@ func listingClosed(status, state string) bool {
 		return true
 	}
 	return false
+}
+
+type ListingLifecycle struct {
+	AdID             int64
+	FirstSeen        time.Time
+	LastSeen         time.Time
+	LastPrice        float64
+	LastCurrency     string
+	LastFingerprint  string
+	SeenCount        int
+	PriceChangeCount int
+	RelistCount      int
+}
+
+func (s *Store) ListingLifecycle(ctx context.Context, adID int64) (ListingLifecycle, error) {
+	var lc ListingLifecycle
+	var firstSeen, lastSeen int64
+	err := s.db.QueryRowContext(ctx, `
+SELECT ad_id, first_seen, last_seen, last_price, last_currency, last_fingerprint,
+       seen_count, price_change_count, relist_count
+FROM listing_lifecycle
+WHERE ad_id = ?`, adID).Scan(
+		&lc.AdID, &firstSeen, &lastSeen, &lc.LastPrice, &lc.LastCurrency, &lc.LastFingerprint,
+		&lc.SeenCount, &lc.PriceChangeCount, &lc.RelistCount,
+	)
+	if err != nil {
+		return lc, err
+	}
+	lc.FirstSeen = timeFromUnix(firstSeen)
+	lc.LastSeen = timeFromUnix(lastSeen)
+	return lc, nil
+}
+
+func (s *Store) ObservationCount(ctx context.Context, adID int64) (int, error) {
+	var n int
+	err := s.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM listing_observations WHERE ad_id = ?`, adID).Scan(&n)
+	return n, err
+}
+
+func recordListingObservationTx(ctx context.Context, tx *sql.Tx, l models.Listing, source string, observedAt time.Time) error {
+	if observedAt.IsZero() {
+		observedAt = time.Now()
+	}
+	currency := models.NormalizeCurrency(l.Currency)
+	fingerprint := listingFingerprint(l.Title)
+	observedUnix := observedAt.Unix()
+	if _, err := tx.ExecContext(ctx, `
+INSERT INTO listing_observations (ad_id, observed_at, price, currency, title, url, fingerprint, source)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+		l.AdID, observedUnix, l.Price, currency, l.Title, l.URL, fingerprint, source); err != nil {
+		return err
+	}
+
+	relistCount := 0
+	if fingerprint != "" {
+		if err := tx.QueryRowContext(ctx,
+			`SELECT COUNT(*) FROM listing_lifecycle WHERE last_fingerprint = ? AND ad_id != ?`,
+			fingerprint, l.AdID).Scan(&relistCount); err != nil {
+			return err
+		}
+	}
+	_, err := tx.ExecContext(ctx, `
+INSERT INTO listing_lifecycle (
+	ad_id, first_seen, last_seen, last_price, last_currency, last_fingerprint,
+	seen_count, price_change_count, relist_count
+) VALUES (?, ?, ?, ?, ?, ?, 1, 0, ?)
+ON CONFLICT(ad_id) DO UPDATE SET
+	last_seen = CASE
+		WHEN excluded.last_seen > listing_lifecycle.last_seen THEN excluded.last_seen
+		ELSE listing_lifecycle.last_seen
+	END,
+	seen_count = listing_lifecycle.seen_count + 1,
+	price_change_count = listing_lifecycle.price_change_count + CASE
+		WHEN excluded.last_price > 0
+		 AND listing_lifecycle.last_price > 0
+		 AND (excluded.last_price != listing_lifecycle.last_price
+		      OR excluded.last_currency != listing_lifecycle.last_currency)
+		THEN 1 ELSE 0
+	END,
+	last_price = CASE
+		WHEN excluded.last_price > 0 THEN excluded.last_price
+		ELSE listing_lifecycle.last_price
+	END,
+	last_currency = CASE
+		WHEN excluded.last_currency != '' THEN excluded.last_currency
+		ELSE listing_lifecycle.last_currency
+	END,
+	last_fingerprint = CASE
+		WHEN excluded.last_fingerprint != '' THEN excluded.last_fingerprint
+		ELSE listing_lifecycle.last_fingerprint
+	END,
+	relist_count = CASE
+		WHEN listing_lifecycle.relist_count > excluded.relist_count THEN listing_lifecycle.relist_count
+		ELSE excluded.relist_count
+	END`,
+		l.AdID, observedUnix, observedUnix, l.Price, currency, fingerprint, relistCount)
+	return err
+}
+
+func listingFingerprint(title string) string {
+	normalized := normalizeFingerprintText(title)
+	if normalized == "" {
+		return ""
+	}
+	sum := sha1.Sum([]byte(normalized))
+	return hex.EncodeToString(sum[:8])
+}
+
+func normalizeFingerprintText(s string) string {
+	var b strings.Builder
+	lastSpace := true
+	for _, r := range strings.ToLower(strings.TrimSpace(s)) {
+		if unicode.IsLetter(r) || unicode.IsDigit(r) {
+			b.WriteRune(r)
+			lastSpace = false
+			continue
+		}
+		if unicode.IsSpace(r) || unicode.IsPunct(r) || unicode.IsSymbol(r) {
+			if !lastSpace {
+				b.WriteByte(' ')
+				lastSpace = true
+			}
+		}
+	}
+	return strings.TrimSpace(b.String())
 }
 
 func (s *Store) ClaimDueListings(ctx context.Context, states []models.ProcessState, limit int, lease time.Duration) ([]models.Listing, error) {
@@ -437,10 +613,32 @@ func (s *Store) Delete(ctx context.Context, adID int64) error {
 }
 
 func (s *Store) UpdateDetails(ctx context.Context, adID int64, description, seller string, price float64, currency string) error {
-	_, err := s.db.ExecContext(ctx,
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+
+	currency = models.NormalizeCurrency(currency)
+	if _, err := tx.ExecContext(ctx,
 		`UPDATE market_listings SET description = ?, seller = ?, price = ?, currency = ? WHERE ad_id = ?`,
-		description, seller, price, currency, adID)
-	return err
+		description, seller, price, currency, adID); err != nil {
+		return err
+	}
+
+	var l models.Listing
+	var createdAt int64
+	if err := tx.QueryRowContext(ctx,
+		`SELECT ad_id, title, price, currency, url, created_at FROM market_listings WHERE ad_id = ?`,
+		adID,
+	).Scan(&l.AdID, &l.Title, &l.Price, &l.Currency, &l.URL, &createdAt); err != nil {
+		return err
+	}
+	l.CreatedAt = time.Now()
+	if err := recordListingObservationTx(ctx, tx, l, "detail", l.CreatedAt); err != nil {
+		return err
+	}
+	return tx.Commit()
 }
 
 // FunnelVerdict — аудит детерминированного вердикта воронки (PLAN_v4 §4.4).
