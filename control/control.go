@@ -37,6 +37,8 @@ type RuntimeHealthProvider interface {
 	GeminiCallsToday() int
 	GeminiDailyLimit() int
 	GeminiCircuitUntil() time.Time
+	SchemaVersion() int
+	BuildVersion() string
 }
 
 // Panel — состояние пульта.
@@ -254,6 +256,8 @@ func (p *Panel) status(ctx context.Context) {
 	if p.health != nil {
 		now := time.Now()
 		fmt.Fprintf(&b, "\nHealth:\n")
+		fmt.Fprintf(&b, "build: %s\n", nonEmptyCtl(p.health.BuildVersion(), "dev"))
+		fmt.Fprintf(&b, "schema_version: %d\n", p.health.SchemaVersion())
 		fmt.Fprintf(&b, "search_ok: %s\n", runtimeAge(now, p.health.LastSearchOK()))
 		fmt.Fprintf(&b, "detail_ok: %s\n", runtimeAge(now, p.health.LastDetailOK()))
 		fmt.Fprintf(&b, "gemini_ok: %s\n", runtimeAge(now, p.health.LastGeminiOK()))
@@ -373,6 +377,13 @@ func geminiCallsStatus(callsToday, dailyLimit int) string {
 		return fmt.Sprintf("%d/%d", callsToday, dailyLimit)
 	}
 	return fmt.Sprintf("%d/unlimited", callsToday)
+}
+
+func nonEmptyCtl(s, fallback string) string {
+	if strings.TrimSpace(s) == "" {
+		return fallback
+	}
+	return s
 }
 
 func fileMTime(path string) time.Time {

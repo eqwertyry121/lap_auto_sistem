@@ -41,6 +41,8 @@ type botState struct {
 	geminiCalls    atomic.Int64
 	geminiLimit    atomic.Int64
 	geminiCircuit  atomic.Int64
+	schemaVersion  atomic.Int64
+	buildVersion   string
 	manualPaused   atomic.Bool // пульт: ⏹ Стоп
 }
 
@@ -67,6 +69,13 @@ func (s *botState) GeminiCallsToday() int     { return int(s.geminiCalls.Load())
 func (s *botState) GeminiDailyLimit() int     { return int(s.geminiLimit.Load()) }
 func (s *botState) GeminiCircuitUntil() time.Time {
 	return loadUnixTime(&s.geminiCircuit)
+}
+func (s *botState) SchemaVersion() int { return int(s.schemaVersion.Load()) }
+func (s *botState) BuildVersion() string {
+	if s == nil || s.buildVersion == "" {
+		return "dev"
+	}
+	return s.buildVersion
 }
 
 func (s *botState) syncGeminiStats(stats vision.GeminiStats) {
@@ -96,6 +105,8 @@ func (s *botState) healthSnapshot(now time.Time) runtimeHealth {
 		GeminiCallsToday:   s.GeminiCallsToday(),
 		GeminiDailyLimit:   s.GeminiDailyLimit(),
 		GeminiCircuitUntil: s.GeminiCircuitUntil(),
+		SchemaVersion:      s.SchemaVersion(),
+		BuildVersion:       s.BuildVersion(),
 	}
 }
 
@@ -170,8 +181,14 @@ func main() {
 	// Heartbeat: единственный критерий живости для watchdog. Горутина живёт
 	// независимо от основного цикла — файл свежий даже в антибот-паузе.
 	st := &botState{
-		beat:      hb.New(cfg.HeartbeatPath, "starting"),
-		startedAt: time.Now(),
+		beat:         hb.New(cfg.HeartbeatPath, "starting"),
+		startedAt:    time.Now(),
+		buildVersion: buildVersion(),
+	}
+	if schemaVersion, err := store.SchemaVersion(ctx); err == nil {
+		st.schemaVersion.Store(int64(schemaVersion))
+	} else {
+		log.Warn("schema version unavailable", "err", err)
 	}
 	go st.beat.Run(ctx, time.Minute)
 

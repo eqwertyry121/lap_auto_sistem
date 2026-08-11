@@ -41,6 +41,8 @@ type runtimeHealth struct {
 	GeminiCallsToday   int
 	GeminiDailyLimit   int
 	GeminiCircuitUntil time.Time
+	SchemaVersion      int
+	BuildVersion       string
 }
 
 // digestText собирает HTML-текст дайджеста. challenges — счётчик с момента
@@ -75,6 +77,8 @@ func digestText(uptime time.Duration, byStatus map[string]int, challenges int64,
 		now = time.Now()
 	}
 	b.WriteString("<b>Health:</b>\n")
+	fmt.Fprintf(&b, "  - build: %s\n", nonEmpty(health.BuildVersion, "dev"))
+	fmt.Fprintf(&b, "  - schema_version: %d\n", health.SchemaVersion)
 	fmt.Fprintf(&b, "  - search_ok: %s\n", healthAge(now, health.LastSearchOK))
 	fmt.Fprintf(&b, "  - detail_ok: %s\n", healthAge(now, health.LastDetailOK))
 	fmt.Fprintf(&b, "  - gemini_ok: %s\n", healthAge(now, health.LastGeminiOK))
@@ -138,6 +142,13 @@ func geminiCallsLine(callsToday, dailyLimit int) string {
 		return fmt.Sprintf("%d/%d", callsToday, dailyLimit)
 	}
 	return fmt.Sprintf("%d/unlimited", callsToday)
+}
+
+func nonEmpty(s, fallback string) string {
+	if strings.TrimSpace(s) == "" {
+		return fallback
+	}
+	return s
 }
 
 func truncateLine(s string, n int) string {

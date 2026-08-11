@@ -612,6 +612,15 @@ func (s *Store) LastTelegramDelivery(ctx context.Context) (time.Time, error) {
 	return time.Unix(sent.Int64, 0), nil
 }
 
+func (s *Store) SchemaVersion(ctx context.Context) (int, error) {
+	var version sql.NullInt64
+	err := s.db.QueryRowContext(ctx, `SELECT MAX(version) FROM schema_migrations`).Scan(&version)
+	if err != nil || !version.Valid {
+		return 0, err
+	}
+	return int(version.Int64), nil
+}
+
 func (s *Store) CountByProcessState(ctx context.Context) (map[string]int, error) {
 	rows, err := s.db.QueryContext(ctx,
 		`SELECT process_state, COUNT(*) FROM market_listings WHERE process_state != '' GROUP BY process_state`)

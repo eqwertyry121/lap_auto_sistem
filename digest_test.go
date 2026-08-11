@@ -79,6 +79,8 @@ func TestDigestText(t *testing.T) {
 		GeminiCallsToday:   7,
 		GeminiDailyLimit:   80,
 		GeminiCircuitUntil: now.Add(30 * time.Minute),
+		SchemaVersion:      1,
+		BuildVersion:       "test-build",
 	}
 	text := digestText(25*time.Hour+13*time.Minute, byStatus, 4, 24677, 858, alerts, processStates, 1, health)
 
@@ -90,6 +92,8 @@ func TestDigestText(t *testing.T) {
 		"3.5%",
 		"DETAIL_PENDING: 2",
 		"telegram_outbox: 1",
+		"build: test-build",
+		"schema_version: 1",
 		"search_ok: 5m0s",
 		"detail_ok: 12m0s",
 		"gemini_ok: never",

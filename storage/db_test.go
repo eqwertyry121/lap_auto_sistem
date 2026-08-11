@@ -69,6 +69,13 @@ func TestOpenRecordsSchemaMigrationVersion(t *testing.T) {
 	if appliedAt <= 0 {
 		t.Fatalf("applied_at = %d", appliedAt)
 	}
+	version, err := st.SchemaVersion(context.Background())
+	if err != nil {
+		t.Fatalf("schema version: %v", err)
+	}
+	if version != storageSchemaVersion {
+		t.Fatalf("schema version = %d, want %d", version, storageSchemaVersion)
+	}
 }
 
 func TestDiscoveredListingCanBeClaimedAfterExistingRow(t *testing.T) {
