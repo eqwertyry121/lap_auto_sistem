@@ -758,13 +758,39 @@ func (m *Market) Deviation(l Lot) (float64, bool) {
 // Lots — все загруженные лоты (для альтернатив и отчётов).
 func (m *Market) Lots() []Lot { return m.lots }
 
-// Composite — суммарная мощность ноутбука по бенчмаркам (CPU+GPU).
-// PLAN_v6: единая метрика «мощнее/слабее» — игровой ноут с сильным GPU не
-// бракуется из-за CPU двух поколений назад, и наоборот.
-func (l Lot) Composite() float64 { return l.CPUScore + l.GPUScore }
+const (
+	performanceBaseline = 10000.0
+	performanceScale    = 1000.0
+	cpuWeightWithDGPU   = 0.45
+	gpuWeightWithDGPU   = 0.55
+)
 
-// ValuePer1000 — баллов на €1000 цены: чем выше, тем выгоднее лот.
-// PLAN_v6: показывается в алерте цифрами, без прилагательных.
+// Composite returns a normalized performance index, not raw CPU+GPU PassMark.
+// CPU and GPU scores live on different scales; log-normalizing each dimension
+// keeps very large dGPU numbers from dominating value and step-up decisions.
+func (l Lot) Composite() float64 {
+	cpu := benchmarkIndex(l.CPUScore)
+	gpu := benchmarkIndex(l.GPUScore)
+	switch {
+	case cpu > 0 && gpu > 0:
+		return performanceScale * (cpuWeightWithDGPU*cpu + gpuWeightWithDGPU*gpu)
+	case cpu > 0:
+		return performanceScale * cpu
+	case gpu > 0:
+		return performanceScale * gpu
+	default:
+		return 0
+	}
+}
+
+func benchmarkIndex(score float64) float64 {
+	if score <= 0 {
+		return 0
+	}
+	return math.Log1p(score/performanceBaseline) / math.Ln2
+}
+
+// ValuePer1000 is normalized performance-index points per EUR 1000.
 func (l Lot) ValuePer1000() float64 {
 	if l.Price <= 0 {
 		return 0

@@ -94,7 +94,7 @@ func main() {
 		ceilingBy = eval.DominatedBy
 	}
 	if eval.OpportunityCeiling > 0 && ceilingBy != nil {
-		fmt.Printf("Opportunity ceiling: %.0f€ by stronger lot %d %s\n",
+		fmt.Printf("Rational ceiling: %.0f€ by stronger lot %d %s\n",
 			eval.OpportunityCeiling, ceilingBy.AdID, ceilingBy.URL)
 	}
 	if eval.StepUp != nil {

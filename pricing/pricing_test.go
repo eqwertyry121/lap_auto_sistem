@@ -644,12 +644,14 @@ func mkLotFull(adID int64, cpuScore, gpuScore, price float64, daysAgo int) Lot {
 
 func TestCompositeAndValue(t *testing.T) {
 	l := Lot{CPUScore: 6871, GPUScore: 47062, Price: 550}
-	if l.Composite() != 53933 {
-		t.Errorf("Composite = %.0f, жду 53933", l.Composite())
+	if l.Composite() >= l.CPUScore+l.GPUScore {
+		t.Errorf("Composite = %.0f, must not be raw CPU+GPU sum", l.Composite())
 	}
-	// 53933 / 550 * 1000 ≈ 98060
-	if v := l.ValuePer1000(); v < 98059 || v > 98061 {
-		t.Errorf("ValuePer1000 = %.0f, жду ~98060", v)
+	if got := l.Composite(); got < 1721 || got > 1722 {
+		t.Errorf("Composite = %.0f, want normalized index around 1721", got)
+	}
+	if v := l.ValuePer1000(); v < 3129 || v > 3131 {
+		t.Errorf("ValuePer1000 = %.0f, want normalized value around 3130", v)
 	}
 }
 

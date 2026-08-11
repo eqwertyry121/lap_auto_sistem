@@ -312,7 +312,7 @@ func analyzeLot(lots []lot, market *pricing.Market, adID int64) {
 		ev.ComparableMedian, ev.ComparableP25, ev.Estimate.N, ev.Estimate.Level, ev.Confidence)
 	fmt.Printf("Отклонение цены: %.0f%%\n", ev.Deviation*100)
 	if ev.DominatedBy != nil && ev.DominatedBy.URL != "" {
-		fmt.Printf("DOMINANCE: максимум CHECK — есть более мощный clean private лот %.0f€ · %.0f баллов\n  %s\n  %s\n\n",
+		fmt.Printf("DOMINANCE: максимум CHECK — есть более мощный clean private лот %.0f€ · индекс %.0f\n  %s\n  %s\n\n",
 			ev.DominatedBy.Price, ev.DominatedBy.Composite(), truncate(ev.DominatedBy.Title, 70), ev.DominatedBy.URL)
 	} else if ev.Deviation <= -0.15 {
 		fmt.Printf("ВЕРДИКТ: кандидат дешевле comparable-медианы на %.0f%%\n\n", -ev.Deviation*100)
@@ -333,12 +333,12 @@ func analyzeLot(lots []lot, market *pricing.Market, adID int64) {
 		fmt.Println("  (нет вариантов заметно дешевле)")
 	}
 
-	// 2) Мощнее за те же деньги (≥+20% CPU-баллов при цене ≤+10%).
-	fmt.Printf("\n--- Мощнее за те же деньги (≥+20%% мощности, цена ≤ +10%%) ---\n")
+	// 2) Мощнее за те же деньги (>=+20% индекса при цене <=+10%).
+	fmt.Printf("\n--- Мощнее за те же деньги (≥+20%% индекса, цена ≤ +10%%) ---\n")
 	shown = 0
 	for _, l := range market.StrongerForBudget(pl, 60, 5, 1.1) {
-		fmt.Printf("  %+.0f%% CPU  %6.0f€  %-22s  %s\n",
-			(l.CPUScore/pl.CPUScore-1)*100, l.Price, truncate(l.CPUModel, 22), l.URL)
+		fmt.Printf("  %+.0f%% index  %6.0f€  %-22s  %s\n",
+			(l.Composite()/pl.Composite()-1)*100, l.Price, truncate(l.CPUModel, 22), l.URL)
 		shown++
 	}
 	if shown == 0 {
@@ -346,7 +346,7 @@ func analyzeLot(lots []lot, market *pricing.Market, adID int64) {
 	}
 	if ev.StepUp != nil && ev.StepUp.URL != "" {
 		fmt.Printf("\n--- Шаг вверх ---\n")
-		fmt.Printf("  %.0f€ (+%.0f€), +%.0f баллов: %s\n  %s\n",
+		fmt.Printf("  %.0f€ (+%.0f€), +%.0f индекса: %s\n  %s\n",
 			ev.StepUp.Price, ev.StepUp.Price-pl.Price, ev.StepUp.Composite()-pl.Composite(),
 			truncate(ev.StepUp.Title, 70), ev.StepUp.URL)
 	}

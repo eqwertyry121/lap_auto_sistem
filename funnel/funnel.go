@@ -596,19 +596,19 @@ func Run(ctx context.Context, f *Funnel, cfg *config.Config, gem *vision.GeminiC
 	// ВАЖНО: цены берём ТОЛЬКО из наших данных KP (медианы dGPU-пула).
 	// Никаких внешних цен через Gemini — интернет используется только чтобы
 	// узнать, ЧТО за ноутбук (L3.4 модель→железо), а не сколько он стоит.
-	// «Шаг вверх» — ближайший смысловой апгрейд: мощнее в целом (CPU+GPU) И
+	// «Шаг вверх» — ближайший смысловой апгрейд: мощнее по нормализованному индексу И
 	// дороже, с минимальной ценой за прирост мощности. Обычный шаг показывается
 	// в алерте; явно лучший value-step гасит алмаз как OUTCLASSED.
 	stepUp := eval.StepUp
 	stepUpOutclassed := stepUpOutclasses(lot, stepUp)
 	outclassReason := ""
 	if stepUp != nil && stepUp.URL != "" {
-		tr.f("L5 шаг вверх: %q €%.0f (+€%.0f, +%.0f баллов) %s", stepUp.Title, stepUp.Price,
+		tr.f("L5 шаг вверх: %q €%.0f (+€%.0f, +%.0f индекса) %s", stepUp.Title, stepUp.Price,
 			stepUp.Price-lot.Price, stepUp.Composite()-lot.Composite(), stepUp.URL)
 		if stepUpOutclassed {
 			dComp := stepUp.Composite() - lot.Composite()
 			dPrice := stepUp.Price - lot.Price
-			outclassReason = fmt.Sprintf("step_up_outclasses=lot %d €%.0f (+€%.0f), %.0f баллов (+%.0f, +%.0f%%), value %.0f vs %.0f баллов/€1000, %s",
+			outclassReason = fmt.Sprintf("step_up_outclasses=lot %d €%.0f (+€%.0f), %.0f индекса (+%.0f, +%.0f%%), value %.0f vs %.0f индекс/€1000, %s",
 				stepUp.AdID, stepUp.Price, dPrice, stepUp.Composite(), dComp, dComp/lot.Composite()*100, stepUp.ValuePer1000(), lot.ValuePer1000(), stepUp.URL)
 			tr.f("L5 анти-алмаз: %s", outclassReason)
 		}
@@ -667,7 +667,7 @@ func Run(ctx context.Context, f *Funnel, cfg *config.Config, gem *vision.GeminiC
 		}
 	}
 	if outclassReason == "" && eval.DominatedBy != nil {
-		outclassReason = fmt.Sprintf("dominated_by=lot %d €%.0f, %.0f баллов, %s",
+		outclassReason = fmt.Sprintf("dominated_by=lot %d €%.0f, индекс %.0f, %s",
 			eval.DominatedBy.AdID, eval.DominatedBy.Price, eval.DominatedBy.Composite(), eval.DominatedBy.URL)
 	}
 	if outclassReason != "" {
@@ -1084,7 +1084,7 @@ func appendOpportunityCeiling(b *strings.Builder, est pricing.PriceEstimate, eva
 	if !ok {
 		return false
 	}
-	fmt.Fprintf(b, "Рациональный потолок: €%.0f по более сильному лоту: %s · €%.0f · %.0f баллов\n",
+	fmt.Fprintf(b, "Рациональный потолок: €%.0f по более сильному лоту: %s · €%.0f · индекс %.0f\n",
 		ceiling, html.EscapeString(truncateRunes(by.Title, 80)), by.Price, by.Composite())
 	fmt.Fprintf(b, "↪ %s\n", html.EscapeString(by.URL))
 	return true
@@ -1105,7 +1105,7 @@ func marketCeiling(est pricing.PriceEstimate, eval pricing.MarketEvaluation) (fl
 
 // valueAlertText — алерт-досье кандидата в низу рынка (PLAN_v6):
 // 💎 DIAMOND / 💎❓ SUSPECT. Только цифры, без прилагательных: медиана сопоставимых
-// KP-лотов, нижний квартиль, рациональный потолок, баллы кандидата и «шаг вверх».
+// KP-лотов, нижний квартиль, рациональный потолок, индекс кандидата и «шаг вверх».
 func valueAlertText(code string, ad models.SearchAd, specsScore string, lot pricing.Lot,
 	est pricing.PriceEstimate, dev float64, nuance string, stepUp *pricing.Lot, eval pricing.MarketEvaluation) string {
 	var b strings.Builder
@@ -1117,7 +1117,7 @@ func valueAlertText(code string, ad models.SearchAd, specsScore string, lot pric
 	}
 	fmt.Fprintf(&b, "<b>%s</b>\n", html.EscapeString(truncateRunes(ad.Name, 90)))
 	fmt.Fprintf(&b, "Железо: %s\n", html.EscapeString(specsScore))
-	fmt.Fprintf(&b, "Мощность: %.0f баллов · %.0f баллов/€1000\n", lot.Composite(), lot.ValuePer1000())
+	fmt.Fprintf(&b, "Индекс: %.0f · %.0f/€1000\n", lot.Composite(), lot.ValuePer1000())
 	fmt.Fprintf(&b, "Цена: <b>€%.0f</b>\n", lot.Price)
 	appendMarketEvaluation(&b, est, dev, eval)
 	if nuance != "" {
@@ -1129,15 +1129,15 @@ func valueAlertText(code string, ad models.SearchAd, specsScore string, lot pric
 		dPrice := stepUp.Price - lot.Price
 		costPer1000 := dPrice / dComp * 1000
 		fmt.Fprintf(&b, "\nШаг вверх: %s\n", html.EscapeString(truncateRunes(stepUp.Title, 80)))
-		fmt.Fprintf(&b, "· €%.0f (+€%.0f) · %.0f баллов (+%.0f, +%.0f%%)\n",
+		fmt.Fprintf(&b, "· €%.0f (+€%.0f) · индекс %.0f (+%.0f, +%.0f%%)\n",
 			stepUp.Price, dPrice, stepUp.Composite(), dComp, dComp/lot.Composite()*100)
-		fmt.Fprintf(&b, "· €%.0f за +1000 баллов (у этого лота %.0f баллов/€1000 против %.0f у шага)\n",
+		fmt.Fprintf(&b, "· €%.0f за +1000 индекса (у этого лота %.0f/€1000 против %.0f у шага)\n",
 			costPer1000, lot.ValuePer1000(), stepUp.ValuePer1000())
 		if stepUp.URL != "" {
 			fmt.Fprintf(&b, "↪ %s\n", html.EscapeString(stepUp.URL))
 		}
 	} else {
-		fmt.Fprintf(&b, "\nМощнее и дороже на рынке нет: %.0f баллов — максимум за свои деньги.\n", lot.Composite())
+		fmt.Fprintf(&b, "\nМощнее и дороже на рынке нет: индекс %.0f — максимум за свои деньги.\n", lot.Composite())
 	}
 	if code == vcSuspect {
 		b.WriteString("\n⚠️ Слишком дёшево — проверь продавца (возможна приманка).\n")
@@ -1157,7 +1157,7 @@ func mooseAlertText(ad models.SearchAd, specsScore string, lot pricing.Lot, nuan
 	fmt.Fprintf(&b, "<b>%s</b>\n", html.EscapeString(truncateRunes(ad.Name, 90)))
 	fmt.Fprintf(&b, "Железо: %s\n", html.EscapeString(specsScore))
 	if lot.Composite() > 0 {
-		fmt.Fprintf(&b, "Мощность: %.0f баллов · %.0f баллов/€1000\n", lot.Composite(), lot.ValuePer1000())
+		fmt.Fprintf(&b, "Индекс: %.0f · %.0f/€1000\n", lot.Composite(), lot.ValuePer1000())
 	}
 	fmt.Fprintf(&b, "Цена: <b>€%.0f</b>\n", lot.Price)
 	b.WriteString("ℹ️ В наших данных KP нет похожих лотов — оценить цену не с чем. Реши по цифрам выше.\n")

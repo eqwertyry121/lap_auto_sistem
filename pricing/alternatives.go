@@ -24,7 +24,7 @@ func (m *Market) CheaperSameCPU(target Lot, windowDays, limit int) []Lot {
 	return cut(out, limit)
 }
 
-// StrongerForBudget — A2: мощнее за те же деньги (≥ +20% баллов, цена
+// StrongerForBudget — A2: мощнее за те же деньги (≥ +20% индекса, цена
 // ≤ priceCapRatio×цены лота: 1.0 = «те же деньги» для алмазного гейта,
 // 1.1 = «≤ +10%» для алерта-альтернатив).
 func (m *Market) StrongerForBudget(target Lot, windowDays, limit int, priceCapRatio float64) []Lot {
@@ -87,11 +87,11 @@ func (m *Market) StrongerGPUForBudget(target Lot, windowDays, limit int, bandPct
 	return cut(out, limit)
 }
 
-// BestValueNearPrice — A3: лучший €/1000 баллов в цене ±20% от лота.
+// BestValueNearPrice returns the best normalized performance index near the target price.
 func (m *Market) BestValueNearPrice(target Lot, windowDays, limit int) []Lot {
 	var out []Lot
 	for _, l := range m.candidates(windowDays) {
-		if l.AdID == target.AdID || l.CPUScore <= 0 {
+		if l.AdID == target.AdID || l.Composite() <= 0 {
 			continue
 		}
 		if l.Price >= target.Price*0.8 && l.Price <= target.Price*1.2 {
@@ -99,12 +99,10 @@ func (m *Market) BestValueNearPrice(target Lot, windowDays, limit int) []Lot {
 		}
 	}
 	sort.Slice(out, func(i, j int) bool {
-		return valuePer1000(out[i]) < valuePer1000(out[j])
+		return out[i].ValuePer1000() > out[j].ValuePer1000()
 	})
 	return cut(out, limit)
 }
-
-func valuePer1000(l Lot) float64 { return l.Price / (l.CPUScore / 1000) }
 
 func cut(lots []Lot, limit int) []Lot {
 	if limit > 0 && len(lots) > limit {
@@ -115,13 +113,13 @@ func cut(lots []Lot, limit int) []Lot {
 
 // BestStepUp — PLAN_v6: «шаг вверх» — ближайший смыслóвой апгрейд.
 //
-// Среди лотов, которые мощнее кандидата в целом (CPU+GPU) И дороже него,
+// Среди лотов, которые мощнее кандидата по нормализованному индексу И дороже него,
 // выбирается тот, у кого минимальна ЦЕНА ЗА ЕДИНИЦУ ПРИРОСТА мощности:
 //
-//	cost = (цена − цена_кандидата) / (баллы − баллы_кандидата)   [€/балл]
+//	cost = (цена − цена_кандидата) / (индекс − индекс_кандидата)
 //
 // Это решает дилемму «первого мощнее»: наивный минимум цены обманывается
-// вариантом «+10 баллов за +€1», тогда как «+1000 баллов за +€1» на порядки
+// вариантом «микроприрост за +€1», тогда как крупный прирост за +€1 на порядки
 // выгоднее и метрика выбирает именно его. Возвращаются топ-limit шагов,
 // отсортированных по выгодности (дешевле за прирост — раньше).
 func (m *Market) BestStepUp(target Lot, windowDays, limit int) []Lot {
