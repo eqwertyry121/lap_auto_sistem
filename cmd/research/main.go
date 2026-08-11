@@ -663,7 +663,7 @@ ON CONFLICT(ad_id) DO UPDATE SET
 		row := specsRow{AdID: r.adID, LaptopModel: specs.ExtractLaptopModel(r.title + " " + r.desc), RAMGB: sp.RAMGB, SSDGB: sp.SSDGB}
 
 		if sp.CPU != "" {
-			if c, ok := cpus[hw.Key(sp.CPU)]; ok {
+			if c, ok := matchCPU(cpus, sp.CPU); ok {
 				row.CPUModel, row.CPUScore = c.Name, c.Score
 				cpuMatched++
 			} else {
@@ -697,6 +697,27 @@ ON CONFLICT(ad_id) DO UPDATE SET
 		"cpu_распознано_и_сверено", cpuMatched,
 		"gpu_распознано_и_сверено", gpuMatched)
 	return nil
+}
+
+func matchCPU(cpus map[string]hw.CPU, token string) (hw.CPU, bool) {
+	if token == "" || cpus == nil {
+		return hw.CPU{}, false
+	}
+	for _, key := range cpuLookupKeys(token) {
+		if c, ok := cpus[key]; ok {
+			return c, true
+		}
+	}
+	return hw.CPU{}, false
+}
+
+func cpuLookupKeys(name string) []string {
+	key := hw.Key(name)
+	keys := []string{key}
+	if fallback := strings.Replace(key, " pro ", " ", 1); fallback != key {
+		keys = append(keys, fallback)
+	}
+	return keys
 }
 
 // matchGPU ищет эталонную видеокарту по токену («RTX 3060»). Ноутбучные

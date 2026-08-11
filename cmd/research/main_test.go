@@ -4,6 +4,7 @@ import (
 	"testing"
 	"time"
 
+	"kpbot/hw"
 	"kpbot/models"
 )
 
@@ -50,7 +51,7 @@ func TestIndividualScore(t *testing.T) {
 
 func TestPrioritizeIndividuals(t *testing.T) {
 	ads := []models.SearchAd{
-		{AdID: 1, KPIzlog: true, IsRenewed: true},  // магазин
+		{AdID: 1, KPIzlog: true, IsRenewed: true},   // магазин
 		{AdID: 2, KPIzlog: false, IsRenewed: false}, // частник
 		{AdID: 3, KPIzlog: true, IsRenewed: false},
 		{AdID: 4, KPIzlog: false, IsRenewed: true},
@@ -61,5 +62,20 @@ func TestPrioritizeIndividuals(t *testing.T) {
 	}
 	if ads[len(ads)-1].AdID != 1 {
 		t.Errorf("последним должен идти магазин (id=1), got id=%d", ads[len(ads)-1].AdID)
+	}
+}
+
+func TestMatchCPUFallsBackFromRyzenProToBaseSKU(t *testing.T) {
+	cpus := map[string]hw.CPU{
+		hw.Key("AMD Ryzen 7 PRO 8840HS"): {Name: "AMD Ryzen 7 PRO 8840HS", Score: 16168},
+		hw.Key("AMD Ryzen 7 8840U"):      {Name: "AMD Ryzen 7 8840U", Score: 14125},
+	}
+	cpu, ok := matchCPU(cpus, "Ryzen 7 PRO 8840HS")
+	if !ok || cpu.Name != "AMD Ryzen 7 PRO 8840HS" || cpu.Score != 16168 {
+		t.Fatalf("exact PRO match = %+v ok=%v", cpu, ok)
+	}
+	cpu, ok = matchCPU(cpus, "Ryzen 7 PRO 8840U")
+	if !ok || cpu.Name != "AMD Ryzen 7 8840U" || cpu.Score != 14125 {
+		t.Fatalf("PRO fallback match = %+v ok=%v", cpu, ok)
 	}
 }
