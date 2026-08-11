@@ -9,7 +9,6 @@
 // Запуск:
 //
 //	go run ./cmd/hwdb                          # скачать рейтинг и обновить БД
-//	go run ./cmd/hwdb -src tools/cpu_table.html  # из уже скачанного файла
 package main
 
 import (

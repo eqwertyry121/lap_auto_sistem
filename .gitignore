@@ -5,6 +5,7 @@ secrets/
 *.exe
 *.log
 tools/js/
+tools/*.html
 tools/home.html
 tools/mhome.html
 tools/kp_probe*.cjs
