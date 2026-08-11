@@ -105,6 +105,7 @@ type groupPrice struct {
 
 // minGroupN — минимальные размеры групп (PLAN_v4 §3.5).
 const (
+	minN_M0 = 5
 	minN_K0 = 8
 	minN_K1 = 5
 	minN_K2 = 5
@@ -450,6 +451,35 @@ func keyK1(l Lot) string { return fmt.Sprintf("%s|%d", l.CPUModel, RAMBand(l.RAM
 
 func keyK2(l Lot) string { return l.CPUModel }
 
+func laptopModelGroupKey(model string) string {
+	fields := strings.Fields(strings.ToLower(strings.TrimSpace(model)))
+	out := make([]string, 0, len(fields))
+	for _, f := range fields {
+		f = strings.Trim(f, " \t\r\n.,;:()[]{}")
+		if f == "" || looksLikeExactModelCode(f) {
+			continue
+		}
+		out = append(out, f)
+	}
+	return strings.Join(out, " ")
+}
+
+func looksLikeExactModelCode(s string) bool {
+	if len(s) < 8 || strings.ContainsAny(s, "-_/") {
+		return false
+	}
+	digits, letters := 0, 0
+	for _, r := range s {
+		switch {
+		case r >= '0' && r <= '9':
+			digits++
+		case r >= 'a' && r <= 'z':
+			letters++
+		}
+	}
+	return digits >= 3 && letters >= 2
+}
+
 // Ключи групп в dGPU-режиме (PLAN_v5): GPU-измерение сохраняется на ВСЕХ
 // уровнях иерархии, чтобы игровой ноут не сравнивался с офисным.
 // GPU нормализуется через hw.Key (единая система координат с эталоном).
@@ -466,6 +496,14 @@ func (m *Market) groupKeyK0(l Lot) string {
 		return fmt.Sprintf("%s|%d|%d|%s", l.CPUModel, RAMBand(l.RAMGB), SSDBand(l.SSDGB), m.gpuKeyPart(l))
 	}
 	return keyK0(l)
+}
+
+func (m *Market) groupKeyM0(l Lot) string {
+	model := laptopModelGroupKey(l.LaptopModel)
+	if model == "" || strings.TrimSpace(l.CPUModel) == "" {
+		return ""
+	}
+	return fmt.Sprintf("M0|%s|%s|%d|%d|%s", model, hw.Key(l.CPUModel), RAMBand(l.RAMGB), SSDBand(l.SSDGB), m.gpuKeyPart(l))
 }
 
 func (m *Market) groupKeyK1(l Lot) string {
@@ -487,6 +525,9 @@ func (m *Market) buildGroups(windowDays int) {
 	items := map[string][]groupPrice{}
 	for _, l := range pool {
 		it := groupPrice{adID: l.AdID, price: l.Price}
+		if key := m.groupKeyM0(l); key != "" {
+			items[key] = append(items[key], it)
+		}
 		items[m.groupKeyK0(l)] = append(items[m.groupKeyK0(l)], it)
 		items[m.groupKeyK1(l)] = append(items[m.groupKeyK1(l)], it)
 		items[m.groupKeyK2(l)] = append(items[m.groupKeyK2(l)], it)
@@ -642,6 +683,8 @@ func (m *Market) Evaluate(l Lot) MarketEvaluation {
 
 func confidenceFor(est PriceEstimate) string {
 	switch {
+	case est.Level == "M0" && est.N >= minN_M0:
+		return "HIGH"
 	case est.Level == "K0" && est.N >= minN_K0:
 		return "HIGH"
 	case (est.Level == "K1" || est.Level == "K2") && est.N >= minN_K1:
@@ -657,15 +700,21 @@ func (m *Market) estimateFor(l Lot, leaveOneOut bool) PriceEstimate {
 	if l.CPUScore <= 0 {
 		return PriceEstimate{}
 	}
-	for _, c := range []struct {
+	type groupChoice struct {
 		key   string
 		level string
 		minN  int
-	}{
+	}
+	groups := []groupChoice{}
+	if key := m.groupKeyM0(l); key != "" {
+		groups = append(groups, groupChoice{key, "M0", minN_M0})
+	}
+	groups = append(groups, []groupChoice{
 		{m.groupKeyK0(l), "K0", minN_K0},
 		{m.groupKeyK1(l), "K1", minN_K1},
 		{m.groupKeyK2(l), "K2", minN_K2},
-	} {
+	}...)
+	for _, c := range groups {
 		if g, ok := m.groups[c.key]; ok && g.n >= c.minN {
 			prices := pricesOf(g.items)
 			if leaveOneOut {

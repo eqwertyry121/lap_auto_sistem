@@ -131,6 +131,65 @@ func TestEstimateHierarchyFallback(t *testing.T) {
 	}
 }
 
+func TestModelGroupPrecedesHardwareGroup(t *testing.T) {
+	var lots []Lot
+	for i := 0; i < minN_M0; i++ {
+		l := mkLot(int64(i+1), "Ryzen 7 7735HS", 24000, 16, 512, 100+float64(i), 5)
+		l.LaptopModel = "Lenovo ThinkPad E14 Gen 6"
+		lots = append(lots, l)
+	}
+	for i := 0; i < minN_K0; i++ {
+		l := mkLot(int64(100+i), "Ryzen 7 7735HS", 24000, 16, 512, 300+float64(i), 5)
+		l.LaptopModel = "HP EliteBook 845 G10"
+		lots = append(lots, l)
+	}
+	m := marketWith(t, lots, 60)
+
+	target := mkLot(999, "AMD Ryzen 7 7735HS", 24000, 16, 512, 95, 1)
+	target.LaptopModel = "Lenovo ThinkPad E14 Gen 6 21M3003PCX"
+	est := m.EstimateFor(target)
+	if est.Level != "M0" {
+		t.Fatalf("level = %q, want M0", est.Level)
+	}
+	if est.N != minN_M0 {
+		t.Fatalf("n = %d, want %d", est.N, minN_M0)
+	}
+	if est.RawMedian < 101 || est.RawMedian > 103 {
+		t.Fatalf("model median = %.0f, want ThinkPad group around 102", est.RawMedian)
+	}
+}
+
+func TestModelGroupFallsBackWhenSparse(t *testing.T) {
+	var lots []Lot
+	for i := 0; i < minN_M0-1; i++ {
+		l := mkLot(int64(i+1), "Ryzen 7 7735HS", 24000, 16, 512, 100+float64(i), 5)
+		l.LaptopModel = "Lenovo ThinkPad E14 Gen 6"
+		lots = append(lots, l)
+	}
+	for i := 0; i < minN_K0; i++ {
+		lots = append(lots, mkLot(int64(100+i), "Ryzen 7 7735HS", 24000, 16, 512, 300+float64(i), 5))
+	}
+	m := marketWith(t, lots, 60)
+
+	target := mkLot(999, "Ryzen 7 7735HS", 24000, 16, 512, 95, 1)
+	target.LaptopModel = "Lenovo ThinkPad E14 Gen 6"
+	est := m.EstimateFor(target)
+	if est.Level != "K0" {
+		t.Fatalf("level = %q, want K0 fallback when M0 is sparse", est.Level)
+	}
+}
+
+func TestLaptopModelGroupKeyDropsExactModelCode(t *testing.T) {
+	a := laptopModelGroupKey("Lenovo ThinkPad E14 Gen 6 21M3003PCX")
+	b := laptopModelGroupKey("Lenovo ThinkPad E14 Gen 6")
+	if a != b {
+		t.Fatalf("model keys differ: %q vs %q", a, b)
+	}
+	if got := laptopModelGroupKey("Lenovo ThinkPad X1Carbon Gen 9"); got != "lenovo thinkpad x1carbon gen 9" {
+		t.Fatalf("model token was stripped too aggressively: %q", got)
+	}
+}
+
 func TestShopsAndBrokenExcluded(t *testing.T) {
 	var lots []Lot
 	for i := 0; i < 8; i++ {
