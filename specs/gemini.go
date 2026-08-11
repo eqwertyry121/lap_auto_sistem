@@ -33,9 +33,9 @@ func (s GeminiSpecs) GPUIntegrated() bool {
 		return true
 	}
 	for _, marker := range []string{
-		"intel hd", "intel uhd", "intel iris", "iris xe",
+		"intel hd", "intel uhd", "intel iris", "iris xe", "intel arc", "arc 130v", "arc 140v",
 		"amd radeon graphics", "radeon graphics", "radeon 610m", "radeon 660m",
-		"radeon 680m", "radeon 760m", "radeon 780m", "radeon 880m", "radeon 890m",
+		"radeon 680m", "radeon 760m", "radeon 780m", "radeon 860m", "radeon 880m", "radeon 890m",
 	} {
 		if strings.Contains(g, marker) {
 			return true

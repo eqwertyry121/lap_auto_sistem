@@ -95,6 +95,8 @@ func TestExtractGPU(t *testing.T) {
 		{"HP ZBook Studio G5 i7-8850H Quadro P2000", "Quadro P2000"},
 		{"Apple MacBook Pro 16 i9 Radeon Pro 5500M", "Radeon Pro 5500M"},
 		{"Asus Zenbook Pro 14 i7-12700H Arc A370M", "Arc A370M"},
+		{"Dell XPS 13 / U9-288V / 32GB / 1TB / Intel ARC 140V", ""},
+		{"LENOVO IdeaPad Pro 5 Core Ultra 5 225H/Arc 130", ""},
 		{"Lenovo P16v Ultra 7 165H 64gb ddr5 1Tb nvm rtx 500 ada 4gb", "RTX 500 Ada"},
 		{"DELL Pro Max Premium 14 U7 265H 32GB 1TB RTX PRO 1000 8GB", "RTX PRO 1000"},
 		{"HP ZBook Fury G1i 16 Ultra 9 RTX PRO 4000 Blackwell", "RTX PRO 4000"},
@@ -109,6 +111,35 @@ func TestExtractGPU(t *testing.T) {
 	for _, c := range cases {
 		if got := ExtractGPU(c.text); got != c.want {
 			t.Errorf("ExtractGPU(%q) = %q, хочу %q", c.text, got, c.want)
+		}
+	}
+}
+
+func TestLooksIntegratedGPU(t *testing.T) {
+	yes := []string{
+		"Dell XPS 13 / U9-288V / 32GB / 1TB / Intel ARC 140V",
+		"LENOVO IdeaPad Pro 5 Core Ultra 5 225H/Arc 130",
+		"Lenovo T14 Gen 2 16GB DDR4 Intel Iris Xe Graphics",
+		"HP EliteBook i7-10510U Intel UHD Graphics",
+		"ThinkPad E14 Ryzen 7 7735HS Radeon 680M Graphics",
+		"HP EliteBook Ryzen AI 7 PRO 350 Radeon 860M",
+	}
+	for _, text := range yes {
+		if !LooksIntegratedGPU(text) {
+			t.Errorf("LooksIntegratedGPU(%q) = false, хочу true", text)
+		}
+	}
+
+	no := []string{
+		"",
+		"Asus Zenbook Pro 14 i7-12700H Arc A370M",
+		"RTX 3050 + Intel UHD",
+		"Grafika Intel UHD 620 Nvidia 4GB",
+		"Dell Inspiron 3593 Intel UHD/MX230",
+	}
+	for _, text := range no {
+		if LooksIntegratedGPU(text) {
+			t.Errorf("LooksIntegratedGPU(%q) = true, хочу false", text)
 		}
 	}
 }
@@ -179,7 +210,8 @@ func TestGPUIntegrated_Variants(t *testing.T) {
 	for _, v := range []string{
 		"integrated", "integrated graphics", "integrisana grafika",
 		"встроенная", "Встроенная видеокарта", "встройка",
-		"AMD Radeon 680M Graphics", "Intel Iris Xe", "Intel UHD Graphics",
+		"AMD Radeon 680M Graphics", "AMD Radeon 860M Graphics",
+		"Intel Iris Xe", "Intel UHD Graphics", "Intel Arc 140V", "Arc 130V",
 	} {
 		gs := GeminiSpecs{GPU: v}
 		if !gs.GPUIntegrated() {

@@ -368,7 +368,10 @@ func Run(ctx context.Context, f *Funnel, cfg *config.Config, gem *vision.GeminiC
 	if laptopModel != "" {
 		tr.f("L3.1 regex: модель ноутбука из текста: %s", laptopModel)
 	}
-	integratedGPU := false
+	integratedGPU := gpuModel == "" && specs.LooksIntegratedGPU(ad.Name+" "+descPlain)
+	if integratedGPU {
+		tr.f("L3.1 regex: явно указана только встроенная графика")
+	}
 	via := "regex"
 	merge := func(stage, viaName string, gs specs.GeminiSpecs) {
 		if gs.LaptopModel != "" && (laptopModel == "" || len(gs.LaptopModel) > len(laptopModel)) {
@@ -404,6 +407,9 @@ func Run(ctx context.Context, f *Funnel, cfg *config.Config, gem *vision.GeminiC
 			}
 			if gs2 > gpuScore {
 				gpuModel, gpuScore = gm, gs2
+			}
+			if gpuModel != "" {
+				integratedGPU = false
 			}
 		}
 		if recognized.RAMGB == 0 {

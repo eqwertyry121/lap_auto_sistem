@@ -231,7 +231,12 @@ var (
 	// T-series без префикса: только ≥1000, чтобы не цеплять ThinkPad T4xx/T5xx.
 	gpuTSeriesRe   = regexp.MustCompile(`(?i)\bT(1000|1200|2000)\b`)
 	gpuRadeonProRe = regexp.MustCompile(`(?i)\bradeon\s?pro\s?(\d{4}[a-z]?)\b`)
-	gpuArcRe       = regexp.MustCompile(`(?i)\barc\s?([a-z]?\d{3}[a-z]?)\b`)
+	// Intel Arc 130/140/140V in Core Ultra laptops is integrated graphics.
+	// Discrete laptop Arc cards are A-series SKUs like Arc A370M.
+	gpuArcRe = regexp.MustCompile(`(?i)\barc\s?-?\s?(a\s?\d{3}m?)\b`)
+
+	integratedGPUTextRe = regexp.MustCompile(`(?i)\b(?:integrated|integrisana|integrisani|integrisano|onboard|intel\s*(?:hd|uhd|iris(?:\s*xe)?|arc)(?:\s*(?:graphics|grafika|[0-9]{3,4}[a-z]?))?|intelhd|inteluhd|iris\s*xe|irisxe|uhd\s*(?:graphics|grafika|[0-9]{3,4})|arc\s*(?:130|140)[a-z]?|radeon\s*(?:graphics|grafika|610m|660m|680m|740m|760m|780m|860m|880m|890m))\b`)
+	discreteGPUHintRe   = regexp.MustCompile(`(?i)\b(?:nvidia|geforce|rtx|gtx|quadro|radeon\s+pro|rx\s?-?\s?\d{3,4}m?|mx\s?-?\s?\d{3}|dgpu|discrete|dedicated|diskretna|dedicirana|grafi[čc]ka\s+\d+\s*gb|a[1-5]000|t(?:550|1000|1200|2000)|[kmp](?:500|520|600|620|1000|1100|1200|2000|2100|2200|3000|3100|3200|4000|4100|5000|5100)m?)\b`)
 )
 
 // ExtractGPU — дискретная видеокарта из текста: «RTX 3060», «GTX 1650 Ti»,
@@ -287,9 +292,23 @@ func ExtractGPU(text string) string {
 		return "Radeon Pro " + m[1]
 	}
 	if m := gpuArcRe.FindStringSubmatch(text); m != nil {
-		return "Arc " + strings.ToUpper(m[1])
+		sku := strings.ToUpper(strings.ReplaceAll(m[1], " ", ""))
+		return "Arc " + sku
 	}
 	return ""
+}
+
+// LooksIntegratedGPU возвращает true, когда текст явно говорит только о
+// встроенной графике. При любом признаке дискретной видеокарты возвращаем false:
+// такие лоты лучше добрать Gemini, чем тихо потерять.
+func LooksIntegratedGPU(text string) bool {
+	if strings.TrimSpace(text) == "" {
+		return false
+	}
+	if ExtractGPU(text) != "" || discreteGPUHintRe.MatchString(text) {
+		return false
+	}
+	return integratedGPUTextRe.MatchString(text)
 }
 
 // Extract — полный разбор текста (заголовок + описание).
