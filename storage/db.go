@@ -77,6 +77,11 @@ func Open(path string) (*Store, error) {
 		return nil, err
 	}
 	db.SetMaxOpenConns(1) // SQLite: один писатель, без SQLITE_BUSY
+	db.SetMaxIdleConns(1)
+	if err := configureSQLite(db); err != nil {
+		db.Close()
+		return nil, fmt.Errorf("sqlite setup: %w", err)
+	}
 	if _, err := db.Exec(schema); err != nil {
 		db.Close()
 		return nil, fmt.Errorf("применение схемы: %w", err)
@@ -84,6 +89,10 @@ func Open(path string) (*Store, error) {
 	if err := migrateListingAudit(db); err != nil {
 		db.Close()
 		return nil, fmt.Errorf("миграция аудита: %w", err)
+	}
+	if err := checkSQLiteIntegrity(db); err != nil {
+		db.Close()
+		return nil, err
 	}
 	return &Store{db: db}, nil
 }
@@ -145,6 +154,46 @@ WHERE process_state = '' AND status IN ('SCANNED','SKIPPED_SPAM','SKIPPED_BAN','
 	}
 	if _, err := db.Exec(`CREATE INDEX IF NOT EXISTS idx_ml_process_due ON market_listings(process_state, next_attempt_at, lease_until)`); err != nil {
 		return err
+	}
+	return nil
+}
+
+func configureSQLite(db *sql.DB) error {
+	for _, stmt := range []string{
+		`PRAGMA busy_timeout=5000`,
+		`PRAGMA journal_mode=WAL`,
+		`PRAGMA synchronous=NORMAL`,
+		`PRAGMA foreign_keys=ON`,
+	} {
+		if _, err := db.Exec(stmt); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func checkSQLiteIntegrity(db *sql.DB) error {
+	rows, err := db.Query(`PRAGMA integrity_check`)
+	if err != nil {
+		return fmt.Errorf("sqlite integrity_check: %w", err)
+	}
+	defer rows.Close()
+
+	var problems []string
+	for rows.Next() {
+		var result string
+		if err := rows.Scan(&result); err != nil {
+			return fmt.Errorf("sqlite integrity_check scan: %w", err)
+		}
+		if strings.TrimSpace(strings.ToLower(result)) != "ok" {
+			problems = append(problems, result)
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return fmt.Errorf("sqlite integrity_check rows: %w", err)
+	}
+	if len(problems) > 0 {
+		return fmt.Errorf("sqlite integrity_check failed: %s", strings.Join(problems, "; "))
 	}
 	return nil
 }
