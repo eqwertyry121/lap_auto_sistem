@@ -25,6 +25,9 @@ var (
 	// формат магазинов «Core Ultra 9 Processor 290HX Plus» (плюс-варианты и
 	// многосуффиксные SKU: 290HX, 285HX, …).
 	ultraRe = regexp.MustCompile(`(?i)\b(?:core\s+)?ultra\s?([579])\s?(?:processor\s+)?(\d{3}[a-z]{0,4}(?:\s?plus)?)\b`)
+	// Intel Core Ultra shorthand from KP titles: «U7-255U», «U9 275HX», «CU7-356H».
+	// Require a letter suffix to avoid old Core 2 Duo names like «U9400».
+	ultraShortRe = regexp.MustCompile(`(?i)\bc?u([579])[-\s]?(\d{3}[a-z]{1,4}(?:\s?plus)?)\b`)
 	// AMD: «Ryzen 5 4600H», «Ryzen 7 PRO 5850U».
 	ryzenRe = regexp.MustCompile(`(?i)\bryzen\s?([3579])\s?(pro\s?)?(\d{4}[a-z]{0,3})\b`)
 	// AMD shorthand from KP titles: «R7-7840HS», «R7 PRO 8845HS».
@@ -40,9 +43,10 @@ func ExtractCPU(text string) string {
 		return strings.ToLower(m[1]) + "-" + strings.ToUpper(m[2])
 	}
 	if m := ultraRe.FindStringSubmatch(text); m != nil {
-		model := strings.ToUpper(m[2])
-		model = strings.ReplaceAll(model, " PLUS", " Plus")
-		return "Ultra " + m[1] + " " + model
+		return formatUltraCPU(m[1], m[2])
+	}
+	if m := ultraShortRe.FindStringSubmatch(text); m != nil {
+		return formatUltraCPU(m[1], m[2])
 	}
 	if m := ryzenRe.FindStringSubmatch(text); m != nil {
 		return formatRyzenCPU(m[1], m[2], m[3])
@@ -51,6 +55,12 @@ func ExtractCPU(text string) string {
 		return formatRyzenCPU(m[1], m[2], m[3])
 	}
 	return ""
+}
+
+func formatUltraCPU(class, model string) string {
+	model = strings.ToUpper(model)
+	model = strings.ReplaceAll(model, " PLUS", " Plus")
+	return "Ultra " + class + " " + model
 }
 
 func formatRyzenCPU(class, pro, model string) string {
@@ -146,8 +156,9 @@ func ExtractMemory(text string) (ramGB, ssdGB int) {
 }
 
 var (
-	gpuNVRe   = regexp.MustCompile(`(?i)\b(rtx|gtx)\s?-?\s?(\d{4})\s?(ti|super)?\b`)
-	gpuRTXARe = regexp.MustCompile(`(?i)\brtx\s?-?\s?a(\d{4})\b`)
+	gpuNVRe     = regexp.MustCompile(`(?i)\b(rtx|gtx)\s?-?\s?(\d{4})\s?(ti|super)?\b`)
+	gpuRTXARe   = regexp.MustCompile(`(?i)\brtx\s?-?\s?a(\d{4})\b`)
+	gpuRTXProRe = regexp.MustCompile(`(?i)\brtx\s?pro\s?(\d{3,4})\b`)
 	// Ada-поколение рабочих GPU: «RTX 500 Ada», «RTX 2000 Ada», …
 	gpuRTXAdaRe = regexp.MustCompile(`(?i)\brtx\s?(\d{3})\s?ada\b`)
 	gpuAMDRe    = regexp.MustCompile(`(?i)\brx\s?-?\s?(\d{4})\s?(xtx|xt|m)?\b`)
@@ -166,6 +177,9 @@ var (
 func ExtractGPU(text string) string {
 	if m := gpuRTXARe.FindStringSubmatch(text); m != nil {
 		return "RTX A" + m[1]
+	}
+	if m := gpuRTXProRe.FindStringSubmatch(text); m != nil {
+		return "RTX PRO " + m[1]
 	}
 	if m := gpuRTXAdaRe.FindStringSubmatch(text); m != nil {
 		return "RTX " + m[1] + " Ada"

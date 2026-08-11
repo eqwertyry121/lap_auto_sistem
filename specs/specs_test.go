@@ -20,6 +20,10 @@ func TestExtractCPU(t *testing.T) {
 		{"LENOVO Legion Pro 7 Intel Core Ultra 9 Processor 290HX Plus RTX 5090", "Ultra 9 290HX Plus"},
 		{"HP Elitebook 6 G1a ULTRA 5 225U 16GB", "Ultra 5 225U"},
 		{"Gaming Ultra 9 285HX 32GB", "Ultra 9 285HX"},
+		{"DELL Pro Max Premium 14 U7 265H 32GB 1TB RTX PRO 1000", "Ultra 7 265H"},
+		{"HP Z8 8 G2i CU7-356H DT3F0ET 32GB", "Ultra 7 356H"},
+		{"Lenovo Legion 7 U9-275HX 32GB 1TB RTX5070 OLED", "Ultra 9 275HX"},
+		{"Hitno! Lenovo X301 Intel U9400/4gbddr2/13,3 Led slim", ""},
 		{"GETAC X500 G3 XQ2SZ5WDTDXL Black", ""},
 		{"Laptop LENOVO IdeaPad 5 14ITL05 DOS/14\"IPS FHD", ""},
 		{"Laptopovi odmah spremni za rad +GARANCIJA 12 meseci Novi Sad", ""},
@@ -82,6 +86,8 @@ func TestExtractGPU(t *testing.T) {
 		{"Apple MacBook Pro 16 i9 Radeon Pro 5500M", "Radeon Pro 5500M"},
 		{"Asus Zenbook Pro 14 i7-12700H Arc A370M", "Arc A370M"},
 		{"Lenovo P16v Ultra 7 165H 64gb ddr5 1Tb nvm rtx 500 ada 4gb", "RTX 500 Ada"},
+		{"DELL Pro Max Premium 14 U7 265H 32GB 1TB RTX PRO 1000 8GB", "RTX PRO 1000"},
+		{"HP ZBook Fury G1i 16 Ultra 9 RTX PRO 4000 Blackwell", "RTX PRO 4000"},
 		{"Lenovo ThinkPad T490 i5-8265U 8GB", ""}, // T490 — модель ноутбука, не GPU
 		{"Lenovo ThinkPad T14 Gen 2 16GB", ""},    // T14 — не GPU
 	}
