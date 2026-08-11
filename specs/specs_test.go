@@ -12,6 +12,9 @@ func TestExtractCPU(t *testing.T) {
 		{"Acer Predator Helios Neo 16 i7-13700HX/32GB DDR5/1TB/RTX4060", "i7-13700HX"},
 		{"HP EliteBook 630 G9 i5-1235U 16GB 256GB SSD +GARANCIJA", "i5-1235U"},
 		{"Laptop AMD Ryzen 5 4600H 8GB/512GB", "Ryzen 5 4600H"},
+		{"HP EliteBook 855 G8 Ryzen 7 PRO 5850u 8c/16t", "Ryzen 7 PRO 5850U"},
+		{"HP Victus / 4070 / R7-7840HS / 32GB", "Ryzen 7 7840HS"},
+		{"Lenovo Yoga Pro 7 R7 PRO 8845HS 16G/1T", "Ryzen 7 PRO 8845HS"},
 		{"HP ZBook Studio Ultra 7 155H 32GB 1TB", "Ultra 7 155H"},
 		// PLAN_v5: каталожный формат магазинов + плюс-варианты.
 		{"LENOVO Legion Pro 7 Intel Core Ultra 9 Processor 290HX Plus RTX 5090", "Ultra 9 290HX Plus"},

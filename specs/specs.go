@@ -25,8 +25,10 @@ var (
 	// формат магазинов «Core Ultra 9 Processor 290HX Plus» (плюс-варианты и
 	// многосуффиксные SKU: 290HX, 285HX, …).
 	ultraRe = regexp.MustCompile(`(?i)\b(?:core\s+)?ultra\s?([579])\s?(?:processor\s+)?(\d{3}[a-z]{0,4}(?:\s?plus)?)\b`)
-	// AMD: «Ryzen 5 4600H», «Ryzen 7 5800U»
-	ryzenRe = regexp.MustCompile(`(?i)\bryzen\s?([3579])\s?(\d{4}[a-z]{0,3})\b`)
+	// AMD: «Ryzen 5 4600H», «Ryzen 7 PRO 5850U».
+	ryzenRe = regexp.MustCompile(`(?i)\bryzen\s?([3579])\s?(pro\s?)?(\d{4}[a-z]{0,3})\b`)
+	// AMD shorthand from KP titles: «R7-7840HS», «R7 PRO 8845HS».
+	ryzenShortRe = regexp.MustCompile(`(?i)\br([3579])[-\s]?(pro[-\s]?)?(\d{4}[a-z]{0,3})\b`)
 
 	thinkPadGenRe = regexp.MustCompile(`(?i)\b(?:lenovo\s+)?thinkpad\s+([a-z]\d{1,3}s?)\s*(?:gen(?:eration)?|g)\s*([0-9]{1,2})\b`)
 	lenovoMTMRe   = regexp.MustCompile(`(?i)\b(2[0-9a-z]{9})\b`)
@@ -43,9 +45,20 @@ func ExtractCPU(text string) string {
 		return "Ultra " + m[1] + " " + model
 	}
 	if m := ryzenRe.FindStringSubmatch(text); m != nil {
-		return "Ryzen " + m[1] + " " + strings.ToUpper(m[2])
+		return formatRyzenCPU(m[1], m[2], m[3])
+	}
+	if m := ryzenShortRe.FindStringSubmatch(text); m != nil {
+		return formatRyzenCPU(m[1], m[2], m[3])
 	}
 	return ""
+}
+
+func formatRyzenCPU(class, pro, model string) string {
+	out := "Ryzen " + class + " "
+	if strings.TrimSpace(pro) != "" {
+		out += "PRO "
+	}
+	return out + strings.ToUpper(model)
 }
 
 // ExtractLaptopModel возвращает явную модель ноутбука из текста, если она
