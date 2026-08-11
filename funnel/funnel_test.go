@@ -204,6 +204,23 @@ func TestMatchCPUFallsBackFromRyzenProToBaseSKU(t *testing.T) {
 	}
 }
 
+func TestGeminiPhotoPromptKeepsKnownModelHint(t *testing.T) {
+	prompt := geminiPhotoPrompt(
+		"Lenovo ThinkPad E14 Gen 6 - Ryzen 7 / 16GB / 512GB",
+		"Prodajem laptop, specifikacije su na poslednjoj slici.",
+		"Lenovo ThinkPad E14 Gen 6",
+	)
+	if !strings.Contains(prompt, "Laptop model hint from title/description: Lenovo ThinkPad E14 Gen 6") {
+		t.Fatalf("prompt does not include known model hint:\n%s", prompt)
+	}
+	if strings.Contains(prompt, "No exact laptop model was found") {
+		t.Fatalf("prompt must not claim missing model when model is known:\n%s", prompt)
+	}
+	if !strings.Contains(prompt, "Photos are attached in the original listing order") {
+		t.Fatalf("prompt must remind Gemini to inspect all photos in order:\n%s", prompt)
+	}
+}
+
 func TestValueAlertTextSeparatesComparableMarketAndCeiling(t *testing.T) {
 	stronger := pricing.Lot{
 		AdID: 2, Title: "Stronger Lenovo", URL: "https://example.test/stronger",

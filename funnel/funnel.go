@@ -485,7 +485,7 @@ func Run(ctx context.Context, f *Funnel, cfg *config.Config, gem *vision.GeminiC
 		for i, ph := range detail.Photos {
 			tr.f("L3.3 фото %d/%d: %s", i+1, len(detail.Photos), ph.BestURL())
 		}
-		gs, note, raw, err := geminiPhotoSpecs(ctx, gem.WithModel(cfg.GeminiVisionModel), ad.Name, descPlain, detail.Photos)
+		gs, note, raw, err := geminiPhotoSpecs(ctx, gem.WithModel(cfg.GeminiVisionModel), ad.Name, descPlain, laptopModel, detail.Photos)
 		bump("L3_GEMINI_PHOTO")
 		bump("L3_3_GEMINI_PHOTO")
 		tr.f("L3.3 запрос Gemini (текстовая часть): %s", traceTrunc(note, 300))
@@ -1043,10 +1043,8 @@ func geminiTextSpecs(ctx context.Context, gem *vision.GeminiClient, title, descP
 	return gs, prompt, out, perr
 }
 
-func geminiPhotoSpecs(ctx context.Context, gem *vision.GeminiClient, title, descPlain string, photos []models.PhotoDoc) (specs.GeminiSpecs, string, string, error) {
-	note := fmt.Sprintf(
-		"Заголовок: %s\nОписание: %s\n\nМодель не удалось определить по тексту. Внимательно рассмотри наклейки процессора, шильдики на дне, гравировки модели и скриншоты характеристик, которые часто лежат в конце галереи.",
-		title, truncateRunes(descPlain, 800))
+func geminiPhotoSpecs(ctx context.Context, gem *vision.GeminiClient, title, descPlain, laptopModel string, photos []models.PhotoDoc) (specs.GeminiSpecs, string, string, error) {
+	note := geminiPhotoPrompt(title, descPlain, laptopModel)
 	parts := []vision.Part{{Text: note}}
 	var wg sync.WaitGroup
 	downloaded := make([]*vision.Part, len(photos))
@@ -1080,6 +1078,19 @@ func geminiPhotoSpecs(ctx context.Context, gem *vision.GeminiClient, title, desc
 	}
 	gs, perr := specs.ParseGeminiSpecs(out)
 	return gs, note, out, perr
+}
+
+func geminiPhotoPrompt(title, descPlain, laptopModel string) string {
+	var b strings.Builder
+	fmt.Fprintf(&b, "Title: %s\nDescription: %s\n", title, truncateRunes(descPlain, 800))
+	if model := strings.TrimSpace(laptopModel); model != "" {
+		fmt.Fprintf(&b, "\nLaptop model hint from title/description: %s\n", model)
+		b.WriteString("Use the model only as a hint. Verify exact CPU/GPU/RAM/SSD on the attached photos/screenshots and do not guess variants.\n")
+	} else {
+		b.WriteString("\nNo exact laptop model was found in text. Carefully inspect CPU stickers, bottom labels, model engravings and specification screenshots.\n")
+	}
+	b.WriteString("Photos are attached in the original listing order; late photos often contain the most useful system/spec screenshots.")
+	return b.String()
 }
 
 // ---------- альтернативы и тексты алертов ----------
