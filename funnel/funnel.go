@@ -28,21 +28,22 @@ import (
 
 // Коды вердиктов (PLAN_v4 §3.6 + PLAN_v5).
 const (
-	vcDiamond    = "DIAMOND"
-	vcSuspect    = "DIAMOND_SUSPECT"
-	vcFair       = "FAIR"
-	vcExpensive  = "EXPENSIVE"
-	vcCheck      = "CHECK"
-	vcManual     = "MANUAL"
-	vcShop       = "SHOP"
-	vcJunk       = "JUNK"
-	vcSanity     = "SANITY"
-	vcNoMarket   = "NO_MARKET"
-	vcOutclassed = "OUTCLASSED"
-	vcSuppressed = "DIAMOND_SUPPRESSED"
-	vcBanMac     = "BAN_MAC"        // PLAN_v5: запрещённая линейка (MacBook)
-	vcNoGpu      = "NO_GPU"         // PLAN_v5: нет дискретной видеокарты
-	vcMoose      = "RARE_NO_MARKET" // железо добыто, но в данных KP не с чем сравнить
+	vcDiamond          = "DIAMOND"
+	vcSuspect          = "DIAMOND_SUSPECT"
+	vcFair             = "FAIR"
+	vcExpensive        = "EXPENSIVE"
+	vcCheck            = "CHECK"
+	vcManual           = "MANUAL"
+	vcShop             = "SHOP"
+	vcJunk             = "JUNK"
+	vcSanity           = "SANITY"
+	vcNoMarket         = "NO_MARKET"
+	vcOutclassed       = "OUTCLASSED"
+	vcSuppressed       = "DIAMOND_SUPPRESSED"
+	vcReviewSuppressed = "REVIEW_SUPPRESSED"
+	vcBanMac           = "BAN_MAC"        // PLAN_v5: запрещённая линейка (MacBook)
+	vcNoGpu            = "NO_GPU"         // PLAN_v5: нет дискретной видеокарты
+	vcMoose            = "RARE_NO_MARKET" // железо добыто, но в данных KP не с чем сравнить
 )
 
 const (
@@ -212,6 +213,29 @@ func mooseAlertWorthy(priceEUR float64, minEUR int) bool {
 	return priceEUR >= float64(minEUR)
 }
 
+func reviewAlertSuppressionReason(sellerClass string, sellerReasons []string) string {
+	if sellerClass != filters.ClassUnknown {
+		return ""
+	}
+	reason := strings.Join(sellerReasons, "; ")
+	if reason == "" {
+		reason = "seller type is unknown"
+	}
+	return "unknown seller type: " + reason
+}
+
+func applyReviewAlertSuppression(code, reason string) (string, string) {
+	if reason == "" {
+		return code, ""
+	}
+	switch code {
+	case vcManual, vcCheck, vcMoose:
+		return vcReviewSuppressed, reason
+	default:
+		return code, ""
+	}
+}
+
 func stepUpOutclasses(target pricing.Lot, step *pricing.Lot) bool {
 	if step == nil || step.URL == "" || target.Price <= 0 || step.Price <= target.Price {
 		return false
@@ -370,6 +394,7 @@ func Run(ctx context.Context, f *Funnel, cfg *config.Config, gem *vision.GeminiC
 	} else {
 		tr.f("L1: PRIVATE — нет магазинных признаков: ни меток KP, ни маркеров текста")
 	}
+	sellerReviewSuppressReason := reviewAlertSuppressionReason(sellerVerdict.Class, sellerVerdict.Reasons)
 
 	// ---- L2: хлам ----
 	junk := filters.L2(facts)
@@ -642,6 +667,19 @@ func Run(ctx context.Context, f *Funnel, cfg *config.Config, gem *vision.GeminiC
 			}
 		}
 		if manualAlertWorthy(priceEUR, cfg.ManualMinEUR) {
+			if suppressedCode, suppressedReason := applyReviewAlertSuppression(vcManual, sellerReviewSuppressReason); suppressedReason != "" {
+				bump("REVIEW_SUPPRESSED")
+				tr.f("ИТОГ: MANUAL тихо — alert suppressed because %s", suppressedReason)
+				flush()
+				return Outcome{
+					Code: suppressedCode, Status: models.StatusNoDeal,
+					Audit: storage.FunnelVerdict{
+						Code:   suppressedCode,
+						Reason: "L3: конфигурация не распознана — " + reason + "; alert_suppressed=" + suppressedReason,
+						Specs:  specsLine,
+					},
+				}
+			}
 			bump("MANUAL_ALERT")
 			tr.f("ИТОГ: 👀 НУЖНО ПОСМОТРЕТЬ — причина: %s · цена %.0f€ ≥ порога %d€ → алерт в Telegram",
 				reason, priceEUR, cfg.ManualMinEUR)
@@ -774,6 +812,12 @@ func Run(ctx context.Context, f *Funnel, cfg *config.Config, gem *vision.GeminiC
 			tr.f("L5 anti-diamond: suppressed because %s", diamondSuppressedReason)
 		}
 	}
+	reviewSuppressedReason := ""
+	if suppressedCode, suppressedReason := applyReviewAlertSuppression(code, sellerReviewSuppressReason); suppressedReason != "" {
+		code = suppressedCode
+		reviewSuppressedReason = suppressedReason
+		tr.f("L5 anti-review-alert: suppressed because %s", reviewSuppressedReason)
+	}
 
 	alts := collectAlternatives(market, lot)
 	altsJSON, _ := json.Marshal(alts)
@@ -806,6 +850,9 @@ func Run(ctx context.Context, f *Funnel, cfg *config.Config, gem *vision.GeminiC
 	}
 	if diamondSuppressedReason != "" {
 		marketRef += "; diamond_suppressed=" + diamondSuppressedReason
+	}
+	if reviewSuppressedReason != "" {
+		marketRef += "; review_suppressed=" + reviewSuppressedReason
 	}
 	if configConflictReason != "" {
 		marketRef += "; config_conflict=" + configConflictReason

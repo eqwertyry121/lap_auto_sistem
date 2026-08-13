@@ -230,6 +230,28 @@ func TestDiamondSuppressionRejectsUnknownConditionValues(t *testing.T) {
 	}
 }
 
+func TestReviewAlertSuppressionForUnknownSeller(t *testing.T) {
+	reason := reviewAlertSuppressionReason(filters.ClassUnknown, []string{"garancija"})
+	if !strings.Contains(reason, "unknown seller type") || !strings.Contains(reason, "garancija") {
+		t.Fatalf("review suppression reason = %q", reason)
+	}
+	for _, code := range []string{vcManual, vcCheck, vcMoose} {
+		gotCode, gotReason := applyReviewAlertSuppression(code, reason)
+		if gotCode != vcReviewSuppressed || gotReason == "" {
+			t.Fatalf("code %s suppression = %s/%q, want %s/reason", code, gotCode, gotReason, vcReviewSuppressed)
+		}
+	}
+	for _, code := range []string{vcFair, vcExpensive, vcOutclassed, vcSuppressed} {
+		gotCode, gotReason := applyReviewAlertSuppression(code, reason)
+		if gotCode != code || gotReason != "" {
+			t.Fatalf("quiet code %s suppression = %s/%q, want unchanged", code, gotCode, gotReason)
+		}
+	}
+	if got := reviewAlertSuppressionReason(filters.ClassPrivate, nil); got != "" {
+		t.Fatalf("private seller suppression reason = %q, want empty", got)
+	}
+}
+
 func TestConditionKindUsesDetailWithSearchFallback(t *testing.T) {
 	if got := listingCondition("", "used"); got != "used" {
 		t.Fatalf("listingCondition fallback = %q, want used", got)
