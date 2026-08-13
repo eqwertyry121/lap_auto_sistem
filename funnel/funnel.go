@@ -254,13 +254,22 @@ func diamondSuppressionReason(est pricing.PriceEstimate, gpuScore float64, integ
 	if gpuScore <= 0 && !integratedGPU {
 		reasons = append(reasons, "unknown GPU score")
 	}
-	if strings.TrimSpace(condition) == "" {
+	if !knownCondition(condition) {
 		reasons = append(reasons, "unknown condition")
 	}
 	if !sellerFound || sellerClass == filters.ClassUnknown {
 		reasons = append(reasons, "unknown seller type")
 	}
 	return strings.Join(reasons, "; ")
+}
+
+func knownCondition(condition string) bool {
+	switch strings.ToLower(strings.TrimSpace(condition)) {
+	case "used", "new", "broken", "polovno", "novo":
+		return true
+	default:
+		return false
+	}
 }
 
 // Outcome — результат прогона для вызывающего кода.

@@ -215,6 +215,21 @@ func TestDiamondSuppressionRejectsUnknownSellerClass(t *testing.T) {
 	}
 }
 
+func TestDiamondSuppressionRejectsUnknownConditionValues(t *testing.T) {
+	for _, condition := range []string{"", "unknown", "UNKNOWN", "n/a", "nije navedeno"} {
+		got := diamondSuppressionReason(pricing.PriceEstimate{Level: "K0"}, 1000, false, condition, true, filters.ClassPrivate)
+		if !strings.Contains(got, "unknown condition") {
+			t.Fatalf("condition %q must suppress diamond, got %q", condition, got)
+		}
+	}
+	for _, condition := range []string{"used", "new", "polovno", "novo"} {
+		got := diamondSuppressionReason(pricing.PriceEstimate{Level: "K0"}, 1000, false, condition, true, filters.ClassPrivate)
+		if strings.Contains(got, "unknown condition") {
+			t.Fatalf("condition %q must be known, got %q", condition, got)
+		}
+	}
+}
+
 func TestMatchCPUFallsBackFromRyzenProToBaseSKU(t *testing.T) {
 	cpus := map[string]hw.CPU{
 		hw.Key("AMD Ryzen 7 PRO 8840HS"): {Name: "AMD Ryzen 7 PRO 8840HS", Score: 16168},
