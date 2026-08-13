@@ -21,6 +21,7 @@ func main() {
 	fmt.Printf("  TELEGRAM_CHAT_ID             len=%d\n", len(cfg.TelegramChatID))
 	fmt.Printf("  CSV_PATH                     %q\n", cfg.CSVPath)
 	fmt.Printf("  DB_PATH                      %q\n", cfg.DBPath)
+	fmt.Printf("  LIVE_SEARCH_PAGES            %d\n", cfg.LiveSearchPages)
 	fmt.Printf("  KP_COOLDOWN_PATH             %q\n", cfg.KPCooldownPath)
 	fmt.Printf("  KP_RATE_COOLDOWN_SEC         %.0f\n", cfg.KPRateCooldown.Seconds())
 	fmt.Printf("  KP_CHALLENGE_COOLDOWN_MIN    %.0f\n", cfg.KPChallengeCooldown.Minutes())

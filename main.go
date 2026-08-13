@@ -290,6 +290,7 @@ func main() {
 
 	log.Info("бот запущен",
 		"poll_interval", cfg.PollInterval.String(),
+		"live_search_pages", cfg.LiveSearchPages,
 		"kp_cooldown_path", cfg.KPCooldownPath,
 		"kp_rate_cooldown", cfg.KPRateCooldown.String(),
 		"kp_challenge_cooldown", cfg.KPChallengeCooldown.String(),
@@ -451,32 +452,28 @@ func pollOnce(ctx context.Context, kp *collector.Client, store *storage.Store, c
 		st.beat.SetState("polling")
 	}
 
-	ads, err := kp.Search(ctx)
-	if err != nil {
-		switch {
-		case errors.Is(err, collector.ErrRateLimited):
-			log.Warn("429 на поиске — пропускаем цикл")
-		case errors.Is(err, collector.ErrChallenge):
-			// Раньше бот ломился каждые 45с всю паузу челленджа — пустые
-			// запросы, продлевающие бан. Теперь одна запись и длинная пауза.
-			st.enterChallengePause(cfg)
-			log.Warn("антибот-челлендж на поиске — длинная пауза",
-				"pause", cfg.ChallengePause.String(),
-				"всего_челленджей", st.challengeCount.Load())
-		default:
-			if ctx.Err() == nil {
-				log.Error("поиск", "err", err)
-			}
-		}
+	if !discoverFreshListings(ctx, kp, store, cfg, log, st) {
 		return
 	}
+	processDueListings(ctx, kp, store, cfg, log, st, fnl, gem, tg)
+}
 
-	st.markLastSearchOK(time.Now())
-	for _, ad := range ads {
+func discoverFreshListings(ctx context.Context, kp *collector.Client, store *storage.Store, cfg *config.Config, log *slog.Logger, st *botState) bool {
+	for page := 1; page <= cfg.LiveSearchPages; page++ {
 		if ctx.Err() != nil {
-			return
+			return false
 		}
-		{
+		res, err := kp.SearchPageFull(ctx, page)
+		if err != nil {
+			handleSearchError(err, cfg, log, st)
+			return false
+		}
+		if res == nil {
+			log.Error("поиск: пустой результат", "page", page)
+			return false
+		}
+		st.markLastSearchOK(time.Now())
+		for _, ad := range res.Ads {
 			l := models.Listing{
 				AdID:         ad.AdID,
 				Title:        ad.Name,
@@ -491,8 +488,41 @@ func pollOnce(ctx context.Context, kp *collector.Client, store *storage.Store, c
 				log.Error("durable queue: discover", "ad_id", ad.AdID, "err", err)
 			}
 		}
+		log.Info("search discovery page", "page", page, "ads", len(res.Ads), "total_pages", res.Pages, "limit", cfg.LiveSearchPages)
+		if !shouldFetchNextLiveSearchPage(res, page, cfg.LiveSearchPages) {
+			break
+		}
 	}
-	processDueListings(ctx, kp, store, cfg, log, st, fnl, gem, tg)
+	return true
+}
+
+func handleSearchError(err error, cfg *config.Config, log *slog.Logger, st *botState) {
+	switch {
+	case errors.Is(err, collector.ErrRateLimited):
+		log.Warn("429 на поиске — пропускаем цикл")
+	case errors.Is(err, collector.ErrChallenge):
+		// Раньше бот ломился каждые 45с всю паузу челленджа — пустые
+		// запросы, продлевающие бан. Теперь одна запись и длинная пауза.
+		st.enterChallengePause(cfg)
+		log.Warn("антибот-челлендж на поиске — длинная пауза",
+			"pause", cfg.ChallengePause.String(),
+			"всего_челленджей", st.challengeCount.Load())
+	default:
+		log.Error("поиск", "err", err)
+	}
+}
+
+func shouldFetchNextLiveSearchPage(res *models.SearchResults, page, maxPages int) bool {
+	if res == nil || maxPages <= 0 || page >= maxPages {
+		return false
+	}
+	if len(res.Ads) == 0 || res.HasReachedMax || res.HasReachedLimit {
+		return false
+	}
+	if res.Pages > 0 && page >= res.Pages {
+		return false
+	}
+	return true
 }
 
 func processDueListings(ctx context.Context, kp *collector.Client, store *storage.Store, cfg *config.Config, log *slog.Logger, st *botState, fnl *funnel.Funnel, gem *vision.GeminiClient, tg *notifier.Telegram) {

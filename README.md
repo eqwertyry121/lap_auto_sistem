@@ -101,6 +101,7 @@ If Telegram variables are absent, alerts are printed to the console.
 | Variable | Default | Purpose |
 |---|---:|---|
 | `POLL_INTERVAL_SEC` | `45` | KP search polling interval |
+| `LIVE_SEARCH_PAGES` | `2` | fresh search pages discovered before detail processing |
 | `DB_PATH` | `data/kp_bot.db` | live bot SQLite DB |
 | `RESEARCH_DB_PATH` | `data/research.db` | market dataset SQLite DB |
 | `DB_BACKUP_DIR` | `data/backups` | daily SQLite backups |

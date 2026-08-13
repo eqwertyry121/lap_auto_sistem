@@ -27,6 +27,9 @@ func TestDefaultConfigValidates(t *testing.T) {
 	if cfg.PollInterval != 45*time.Second {
 		t.Fatalf("PollInterval = %s", cfg.PollInterval)
 	}
+	if cfg.LiveSearchPages != 2 {
+		t.Fatalf("LiveSearchPages = %d", cfg.LiveSearchPages)
+	}
 	if cfg.DBBackupDir != "data/backups" {
 		t.Fatalf("DBBackupDir = %q", cfg.DBBackupDir)
 	}
@@ -50,6 +53,7 @@ func TestDefaultConfigValidates(t *testing.T) {
 func TestConfigRejectsInvalidEnvValues(t *testing.T) {
 	cfg := loadTestConfig(map[string]string{
 		"POLL_INTERVAL_SEC":       "abc",
+		"LIVE_SEARCH_PAGES":       "many",
 		"GEMINI_CONCURRENCY":      "fast",
 		"GEMINI_DAILY_BUDGET_USD": "money",
 		"REQUIRE_DGPU":            "maybe",
@@ -60,7 +64,7 @@ func TestConfigRejectsInvalidEnvValues(t *testing.T) {
 		t.Fatal("Validate must reject invalid env values")
 	}
 	msg := err.Error()
-	for _, want := range []string{"POLL_INTERVAL_SEC", "GEMINI_CONCURRENCY", "GEMINI_DAILY_BUDGET_USD", "REQUIRE_DGPU", "KP_WATCHDOG_RESEARCH"} {
+	for _, want := range []string{"POLL_INTERVAL_SEC", "LIVE_SEARCH_PAGES", "GEMINI_CONCURRENCY", "GEMINI_DAILY_BUDGET_USD", "REQUIRE_DGPU", "KP_WATCHDOG_RESEARCH"} {
 		if !strings.Contains(msg, want) {
 			t.Fatalf("error %q does not mention %s", msg, want)
 		}
@@ -96,6 +100,8 @@ func TestConfigRejectsBadThresholds(t *testing.T) {
 		{"negative manual", func(c *Config) { c.ManualMinEUR = -1 }, "MANUAL_MIN_EUR"},
 		{"negative gemini budget", func(c *Config) { c.GeminiDailyBudgetUSD = -0.01 }, "GEMINI_DAILY_BUDGET_USD"},
 		{"bad tol", func(c *Config) { c.MarketTolPct = 101 }, "MARKET_TOL_PCT"},
+		{"zero live search pages", func(c *Config) { c.LiveSearchPages = 0 }, "LIVE_SEARCH_PAGES"},
+		{"too many live search pages", func(c *Config) { c.LiveSearchPages = 11 }, "LIVE_SEARCH_PAGES"},
 		{"empty kp cooldown path", func(c *Config) { c.KPCooldownPath = "" }, "KP_COOLDOWN_PATH"},
 		{"zero rate cooldown", func(c *Config) { c.KPRateCooldown = 0 }, "KP_RATE_COOLDOWN_SEC"},
 		{"zero challenge cooldown", func(c *Config) { c.KPChallengeCooldown = 0 }, "KP_CHALLENGE_COOLDOWN_MIN"},

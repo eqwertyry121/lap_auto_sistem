@@ -11,10 +11,11 @@ import (
 )
 
 type Config struct {
-	PollInterval time.Duration
-	DBPath       string
-	DBBackupDir  string
-	FetchDelay   time.Duration
+	PollInterval    time.Duration
+	LiveSearchPages int
+	DBPath          string
+	DBBackupDir     string
+	FetchDelay      time.Duration
 
 	GeminiAPIKey         string
 	GeminiModel          string
@@ -81,6 +82,7 @@ func loadWithEnv(r *envReader) *Config {
 
 	cfg := &Config{
 		PollInterval:         r.durationSec("POLL_INTERVAL_SEC", 45),
+		LiveSearchPages:      r.int("LIVE_SEARCH_PAGES", 2),
 		DBPath:               r.str("DB_PATH", "data/kp_bot.db"),
 		DBBackupDir:          r.str("DB_BACKUP_DIR", "data/backups"),
 		FetchDelay:           time.Duration(r.int("FETCH_DELAY_MS", 700)) * time.Millisecond,
@@ -153,6 +155,9 @@ func (c *Config) Validate() error {
 	}
 	if c.GeminiConcurrency <= 0 || c.GeminiConcurrency > 20 {
 		return fmt.Errorf("GEMINI_CONCURRENCY must be in 1..20")
+	}
+	if c.LiveSearchPages <= 0 || c.LiveSearchPages > 10 {
+		return fmt.Errorf("LIVE_SEARCH_PAGES must be in 1..10")
 	}
 	if c.GeminiDailyLimit < 0 {
 		return fmt.Errorf("GEMINI_DAILY_LIMIT must be >= 0")
