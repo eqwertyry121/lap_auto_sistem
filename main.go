@@ -626,6 +626,10 @@ func processDueListings(ctx context.Context, kp *collector.Client, store *storag
 }
 
 func drainTelegramOutbox(ctx context.Context, store *storage.Store, tg *notifier.Telegram, log *slog.Logger, st *botState, limit int) {
+	if !telegramOutboxEnabled(tg) {
+		log.Warn("telegram outbox disabled: pending alerts stay queued until Telegram is configured")
+		return
+	}
 	items, err := store.ClaimTelegramOutbox(ctx, limit, 2*time.Minute)
 	if err != nil {
 		log.Error("telegram outbox: claim", "err", err)
@@ -654,6 +658,10 @@ func drainTelegramOutbox(ctx context.Context, store *storage.Store, tg *notifier
 }
 
 func telegramOutboxLoop(ctx context.Context, store *storage.Store, tg *notifier.Telegram, log *slog.Logger, st *botState) {
+	if !telegramOutboxEnabled(tg) {
+		log.Warn("telegram outbox loop disabled: Telegram is not configured")
+		return
+	}
 	drainTelegramOutbox(ctx, store, tg, log, st, 20)
 	ticker := time.NewTicker(30 * time.Second)
 	defer ticker.Stop()
@@ -665,6 +673,10 @@ func telegramOutboxLoop(ctx context.Context, store *storage.Store, tg *notifier.
 			drainTelegramOutbox(ctx, store, tg, log, st, 20)
 		}
 	}
+}
+
+func telegramOutboxEnabled(tg *notifier.Telegram) bool {
+	return tg != nil && tg.Enabled()
 }
 
 func exportOnce(ctx context.Context, store *storage.Store, exp *exporter.CSVExporter, log *slog.Logger) {
