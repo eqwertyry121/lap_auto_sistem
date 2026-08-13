@@ -19,6 +19,8 @@ import (
 	"log/slog"
 	"os"
 	"os/signal"
+	"path/filepath"
+	"strconv"
 	"syscall"
 	"time"
 
@@ -30,17 +32,32 @@ import (
 )
 
 func main() {
+	_ = godotenv.Load()
 	var (
-		dbPath       = flag.String("db", envOr("DB_PATH", "data/kp_bot.db"), "путь к SQLite-базе")
-		maxPages     = flag.Int("max-pages", 0, "максимум страниц (0 — до конца выдачи)")
-		delayMS      = flag.Int("delay-ms", 1500, "пауза между страницами, мс")
-		stopOnStaleN = flag.Int("stale-pages", 5, "остановиться после N страниц подряд без новых лотов (0 — не останавливаться)")
+		defaultErrors                 []string
+		kpCooldownPathDefault         = envOr("KP_COOLDOWN_PATH", filepath.Join("data", "kp_cooldown"))
+		kpRateCooldownSecDefault      = envPositiveInt("KP_RATE_COOLDOWN_SEC", 90, &defaultErrors)
+		kpChallengeCooldownMinDefault = envPositiveInt("KP_CHALLENGE_COOLDOWN_MIN", 30, &defaultErrors)
+		dbPath                        = flag.String("db", envOr("DB_PATH", "data/kp_bot.db"), "путь к SQLite-базе")
+		maxPages                      = flag.Int("max-pages", 0, "максимум страниц (0 — до конца выдачи)")
+		delayMS                       = flag.Int("delay-ms", 1500, "пауза между страницами, мс")
+		stopOnStaleN                  = flag.Int("stale-pages", 5, "остановиться после N страниц подряд без новых лотов (0 — не останавливаться)")
+		kpCooldownPath                = flag.String("kp-cooldown", kpCooldownPathDefault, "shared KP cooldown file")
+		kpRateCooldownSec             = flag.Int("kp-rate-cooldown-sec", kpRateCooldownSecDefault, "shared cooldown after KP 429, seconds")
+		kpChallengeCooldownMin        = flag.Int("kp-challenge-cooldown-min", kpChallengeCooldownMinDefault, "shared cooldown after KP challenge, minutes")
 	)
 	flag.Parse()
 
-	_ = godotenv.Load()
 	slog.SetDefault(slog.New(slog.NewTextHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelInfo})))
 	log := slog.Default()
+	if len(defaultErrors) > 0 {
+		log.Error("invalid environment", "err", fmt.Sprint(defaultErrors))
+		os.Exit(2)
+	}
+	if *delayMS <= 0 || *kpRateCooldownSec <= 0 || *kpChallengeCooldownMin <= 0 {
+		log.Error("invalid config", "delay_ms", *delayMS, "kp_rate_cooldown_sec", *kpRateCooldownSec, "kp_challenge_cooldown_min", *kpChallengeCooldownMin)
+		os.Exit(2)
+	}
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
@@ -52,10 +69,16 @@ func main() {
 	}
 	defer store.Close()
 
-	client := collector.NewClient()
+	client := collector.NewClient(collector.WithSharedCooldown(
+		*kpCooldownPath,
+		time.Duration(*kpRateCooldownSec)*time.Second,
+		time.Duration(*kpChallengeCooldownMin)*time.Minute,
+	))
 
 	log.Info("сканирование рынка ноутбуков KP",
-		"db", *dbPath, "max_pages", *maxPages, "delay_ms", *delayMS)
+		"db", *dbPath, "max_pages", *maxPages, "delay_ms", *delayMS,
+		"kp_cooldown_path", *kpCooldownPath, "kp_rate_cooldown_sec", *kpRateCooldownSec,
+		"kp_challenge_cooldown_min", *kpChallengeCooldownMin)
 
 	started := time.Now()
 	var (
@@ -91,6 +114,10 @@ func main() {
 					break
 				}
 				continue // повторяем ту же страницу
+			}
+			if errors.Is(err, collector.ErrChallenge) {
+				log.Error("KP вернул антибот-челлендж — останавливаюсь", "page", page)
+				break
 			}
 			if ctx.Err() != nil {
 				break
@@ -135,13 +162,19 @@ func main() {
 			}
 			cur := models.NormalizeCurrency(ad.Currency)
 			l := models.Listing{
-				AdID:      ad.AdID,
-				Title:     ad.Name,
-				Price:     float64(ad.Price),
-				Currency:  cur,
-				URL:       ad.URL(),
-				Status:    models.StatusScanned,
-				CreatedAt: time.Now(),
+				AdID:            ad.AdID,
+				UserID:          ad.UserID,
+				Title:           ad.Name,
+				Price:           float64(ad.Price),
+				Currency:        cur,
+				URL:             ad.URL(),
+				Condition:       ad.Condition,
+				Exchange:        ad.Exchange,
+				KPIzlog:         ad.KPIzlog,
+				IsRenewed:       ad.IsRenewed,
+				DescriptionSnip: ad.DescriptionSnip,
+				Status:          models.StatusScanned,
+				CreatedAt:       time.Now(),
 			}
 			if err := store.InsertListing(ctx, l); err != nil {
 				log.Error("запись лота", "ad_id", ad.AdID, "err", err)
@@ -209,4 +242,19 @@ func envOr(key, def string) string {
 		return v
 	}
 	return def
+}
+
+func envPositiveInt(key string, def int, errs *[]string) int {
+	v := os.Getenv(key)
+	if v == "" {
+		return def
+	}
+	n, err := strconv.Atoi(v)
+	if err != nil || n <= 0 {
+		if errs != nil {
+			*errs = append(*errs, fmt.Sprintf("%s must be positive integer, got %q", key, v))
+		}
+		return def
+	}
+	return n
 }

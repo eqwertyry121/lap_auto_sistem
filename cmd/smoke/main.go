@@ -35,7 +35,7 @@ func main() {
 		}
 
 		// Vision: берём одно реальное фото ноутбука с KP и просим Gemini его описать.
-		if photoURL := samplePhoto(ctx); photoURL != "" {
+		if photoURL := samplePhoto(ctx, cfg); photoURL != "" {
 			img, err := g.ImageToPart(ctx, photoURL)
 			if err != nil {
 				fmt.Println("[GEMINI-VISION] не удалось скачать фото:", err)
@@ -71,8 +71,10 @@ func main() {
 }
 
 // samplePhoto — одно фото ноутбука с KP (первое попавшееся объявление с фото).
-func samplePhoto(ctx context.Context) string {
-	kp := collector.NewClient()
+func samplePhoto(ctx context.Context, cfg *config.Config) string {
+	kp := collector.NewClient(collector.WithSharedCooldown(
+		cfg.KPCooldownPath, cfg.KPRateCooldown, cfg.KPChallengeCooldown,
+	))
 	ads, err := kp.Search(ctx)
 	if err != nil || len(ads) == 0 {
 		return ""

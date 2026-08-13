@@ -17,6 +17,7 @@ import (
 	_ "modernc.org/sqlite"
 
 	"kpbot/collector"
+	"kpbot/config"
 )
 
 // Контрольный магазин из сохраненного аудита KP: точно Trgovac.
@@ -72,7 +73,10 @@ LIMIT 12`)
 		os.Exit(1)
 	}
 
-	kp := collector.NewClient()
+	cfg := config.Load()
+	kp := collector.NewClient(collector.WithSharedCooldown(
+		cfg.KPCooldownPath, cfg.KPRateCooldown, cfg.KPChallengeCooldown,
+	))
 	probed := 0
 
 	fmt.Println("=== контрольный магазин (ожидается trader с title) ===")

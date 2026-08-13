@@ -12,6 +12,7 @@ import (
 	_ "modernc.org/sqlite"
 
 	"kpbot/collector"
+	"kpbot/config"
 )
 
 func main() {
@@ -63,7 +64,10 @@ LIMIT 5`)
 	}
 
 	fmt.Printf("\n=== живой /eds/%d ===\n", firstID)
-	kp := collector.NewClient()
+	cfg := config.Load()
+	kp := collector.NewClient(collector.WithSharedCooldown(
+		cfg.KPCooldownPath, cfg.KPRateCooldown, cfg.KPChallengeCooldown,
+	))
 	cctx, cancel := context.WithTimeout(ctx, 30*time.Second)
 	defer cancel()
 	d, err := kp.FetchDetail(cctx, firstID)

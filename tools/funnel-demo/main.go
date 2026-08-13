@@ -35,7 +35,9 @@ func main() {
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
 	defer cancel()
 
-	kp := collector.NewClient()
+	kp := collector.NewClient(collector.WithSharedCooldown(
+		cfg.KPCooldownPath, cfg.KPRateCooldown, cfg.KPChallengeCooldown,
+	))
 
 	var ad models.SearchAd
 	switch {

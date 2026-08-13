@@ -6,10 +6,13 @@ import (
 	"context"
 	"testing"
 	"time"
+
+	"github.com/joho/godotenv"
 )
 
 // Проверка реального KP API. Запуск: go test -tags live ./collector -run TestLive -v
 func TestLive(t *testing.T) {
+	_ = godotenv.Load()
 	c := NewClient()
 	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer cancel()
