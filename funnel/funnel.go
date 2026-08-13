@@ -1052,11 +1052,37 @@ func geminiTextSpecs(ctx context.Context, gem *vision.GeminiClient, title, descP
 func geminiPhotoSpecs(ctx context.Context, gem *vision.GeminiClient, title, descPlain, laptopModel string, photos []models.PhotoDoc) (specs.GeminiSpecs, string, string, error) {
 	note := geminiPhotoPrompt(title, descPlain, laptopModel)
 	parts := []vision.Part{{Text: note}}
+	photoParts, failures := downloadGeminiPhotoParts(ctx, gem, photos)
+	if len(failures) > 0 {
+		return specs.GeminiSpecs{}, note, "", fmt.Errorf("фото скачались не полностью (%d/%d): %s",
+			len(photos)-len(failures), len(photos), strings.Join(failures, "; "))
+	}
+	if len(photoParts) == 0 {
+		return specs.GeminiSpecs{}, note, "", fmt.Errorf("фото не скачались")
+	}
+	parts = append(parts, photoParts...)
+	out, err := gem.Generate(ctx, specs.GeminiSpecsPrompt, parts)
+	if err != nil {
+		return specs.GeminiSpecs{}, note, "", err
+	}
+	gs, perr := specs.ParseGeminiSpecs(out)
+	return gs, note, out, perr
+}
+
+func downloadGeminiPhotoParts(ctx context.Context, gem *vision.GeminiClient, photos []models.PhotoDoc) ([]vision.Part, []string) {
 	var wg sync.WaitGroup
 	downloaded := make([]*vision.Part, len(photos))
+	failures := make([]string, 0)
+	var mu sync.Mutex
+	addFailure := func(msg string) {
+		mu.Lock()
+		defer mu.Unlock()
+		failures = append(failures, msg)
+	}
 	for i, ph := range photos {
 		u := ph.BestURL()
 		if u == "" {
+			addFailure(fmt.Sprintf("фото %d/%d: пустой URL", i+1, len(photos)))
 			continue
 		}
 		wg.Add(1)
@@ -1064,26 +1090,25 @@ func geminiPhotoSpecs(ctx context.Context, gem *vision.GeminiClient, title, desc
 			defer wg.Done()
 			p, err := gem.ImageToPart(ctx, u)
 			if err != nil {
+				addFailure(fmt.Sprintf("фото %d/%d %s: %v", i+1, len(photos), u, err))
 				return
 			}
 			downloaded[i] = p
 		}(i, u)
 	}
 	wg.Wait()
+	if len(failures) > 0 {
+		return nil, failures
+	}
+	out := make([]vision.Part, 0, len(downloaded))
 	for _, p := range downloaded {
-		if p != nil {
-			parts = append(parts, *p)
+		if p == nil {
+			failures = append(failures, "фото не скачалось")
+			continue
 		}
+		out = append(out, *p)
 	}
-	if len(parts) == 1 {
-		return specs.GeminiSpecs{}, note, "", fmt.Errorf("фото не скачались")
-	}
-	out, err := gem.Generate(ctx, specs.GeminiSpecsPrompt, parts)
-	if err != nil {
-		return specs.GeminiSpecs{}, note, "", err
-	}
-	gs, perr := specs.ParseGeminiSpecs(out)
-	return gs, note, out, perr
+	return out, failures
 }
 
 func geminiPhotoPrompt(title, descPlain, laptopModel string) string {

@@ -3,6 +3,9 @@ package funnel
 import (
 	"context"
 	"database/sql"
+	"encoding/base64"
+	"net/http"
+	"net/http/httptest"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -12,6 +15,7 @@ import (
 	"kpbot/models"
 	"kpbot/pricing"
 	"kpbot/specs"
+	"kpbot/vision"
 )
 
 func TestDecideL0(t *testing.T) {
@@ -223,6 +227,62 @@ func TestGeminiPhotoPromptKeepsKnownModelHint(t *testing.T) {
 	}
 	if !strings.Contains(prompt, "Photos are attached in the original listing order") {
 		t.Fatalf("prompt must remind Gemini to inspect all photos in order:\n%s", prompt)
+	}
+}
+
+func TestDownloadGeminiPhotoPartsRequiresAllPhotos(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/ok" {
+			w.Header().Set("Content-Type", "image/jpeg")
+			_, _ = w.Write([]byte("ok"))
+			return
+		}
+		http.Error(w, "missing", http.StatusNotFound)
+	}))
+	defer srv.Close()
+
+	gem := vision.NewGeminiClient("key", "gemini-2.5-flash-lite")
+	parts, failures := downloadGeminiPhotoParts(context.Background(), gem, []models.PhotoDoc{
+		{Big: srv.URL + "/ok"},
+		{Big: srv.URL + "/missing"},
+	})
+	if len(parts) != 0 {
+		t.Fatalf("parts len = %d, want 0 on partial download", len(parts))
+	}
+	if len(failures) != 1 || !strings.Contains(failures[0], "фото 2/2") {
+		t.Fatalf("failures = %+v, want photo 2/2 failure", failures)
+	}
+}
+
+func TestDownloadGeminiPhotoPartsKeepsListingOrder(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "image/jpeg")
+		switch r.URL.Path {
+		case "/one":
+			_, _ = w.Write([]byte("one"))
+		case "/two":
+			_, _ = w.Write([]byte("two"))
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer srv.Close()
+
+	gem := vision.NewGeminiClient("key", "gemini-2.5-flash-lite")
+	parts, failures := downloadGeminiPhotoParts(context.Background(), gem, []models.PhotoDoc{
+		{Big: srv.URL + "/one"},
+		{Big: srv.URL + "/two"},
+	})
+	if len(failures) != 0 {
+		t.Fatalf("failures = %+v", failures)
+	}
+	if len(parts) != 2 {
+		t.Fatalf("parts len = %d, want 2", len(parts))
+	}
+	got1, _ := base64.StdEncoding.DecodeString(parts[0].InlineData.Data)
+	got2, _ := base64.StdEncoding.DecodeString(parts[1].InlineData.Data)
+	if string(got1) != "one" || string(got2) != "two" {
+		t.Fatalf("photo order = %q, %q; want one, two", got1, got2)
 	}
 }
 
