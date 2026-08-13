@@ -43,12 +43,12 @@ func (c *Client) SearchPageFull(ctx context.Context, page int) (*models.SearchRe
 		return nil, fmt.Errorf("kp search: чтение тела: %w", err)
 	}
 	if isChallengeBody(body) {
-		recordSharedCooldown(ErrChallenge)
+		c.recordSharedCooldown(ErrChallenge)
 		return nil, ErrChallenge
 	}
 	if resp.StatusCode != http.StatusOK {
 		err := decodeError(resp.StatusCode, string(body))
-		recordSharedCooldown(err)
+		c.recordSharedCooldown(err)
 		return nil, err
 	}
 

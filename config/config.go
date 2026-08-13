@@ -32,11 +32,15 @@ type Config struct {
 	ExportInterval time.Duration
 
 	// Фаза 0 (PLAN_v4): надёжность и наблюдаемость.
-	ChallengePause time.Duration // пауза при антибот-челлендже KP на поиске
-	HeartbeatPath  string        // файл живости для watchdog
-	LockPath       string
-	DigestAt       string // время дневного дайджеста, «HH:MM»
-	ResearchDBPath string // датасет рынка (read-only для дайджеста)
+	ChallengePause      time.Duration // пауза при антибот-челлендже KP на поиске
+	HeartbeatPath       string        // файл живости для watchdog
+	LockPath            string
+	KPCooldownPath      string
+	KPRateCooldown      time.Duration
+	KPChallengeCooldown time.Duration
+	KPWatchdogResearch  bool
+	DigestAt            string // время дневного дайджеста, «HH:MM»
+	ResearchDBPath      string // датасет рынка (read-only для дайджеста)
 
 	// Фаза 4 (PLAN_v4): воронка L0–L5 в живом боте.
 	FunnelTrace   bool          // FUNNEL_TRACE=0: выключить подробный журнал воронки
@@ -93,11 +97,15 @@ func loadWithEnv(r *envReader) *Config {
 		CSVPath:              r.str("CSV_PATH", "data/market_history.csv"),
 		ExportInterval:       r.durationMin("EXPORT_INTERVAL_MIN", 30),
 
-		ChallengePause: r.durationMin("CHALLENGE_PAUSE_MIN", 30),
-		HeartbeatPath:  r.str("HEARTBEAT_PATH", "data/kpbot.heartbeat"),
-		LockPath:       r.str("LOCK_PATH", "data/kpbot.lock"),
-		DigestAt:       r.str("DIGEST_AT", "09:00"),
-		ResearchDBPath: r.str("RESEARCH_DB_PATH", "data/research.db"),
+		ChallengePause:      r.durationMin("CHALLENGE_PAUSE_MIN", 30),
+		HeartbeatPath:       r.str("HEARTBEAT_PATH", "data/kpbot.heartbeat"),
+		LockPath:            r.str("LOCK_PATH", "data/kpbot.lock"),
+		KPCooldownPath:      r.str("KP_COOLDOWN_PATH", "data/kp_cooldown"),
+		KPRateCooldown:      r.durationSec("KP_RATE_COOLDOWN_SEC", 90),
+		KPChallengeCooldown: r.durationMin("KP_CHALLENGE_COOLDOWN_MIN", 30),
+		KPWatchdogResearch:  r.bool("KP_WATCHDOG_RESEARCH", false),
+		DigestAt:            r.str("DIGEST_AT", "09:00"),
+		ResearchDBPath:      r.str("RESEARCH_DB_PATH", "data/research.db"),
 
 		FunnelTrace:   r.bool("FUNNEL_TRACE", true),
 		MarketRefresh: r.durationMin("MARKET_REFRESH_MIN", 360),
@@ -135,6 +143,8 @@ func (c *Config) Validate() error {
 		{"FETCH_DELAY_MS", c.FetchDelay},
 		{"EXPORT_INTERVAL_MIN", c.ExportInterval},
 		{"CHALLENGE_PAUSE_MIN", c.ChallengePause},
+		{"KP_RATE_COOLDOWN_SEC", c.KPRateCooldown},
+		{"KP_CHALLENGE_COOLDOWN_MIN", c.KPChallengeCooldown},
 		{"MARKET_REFRESH_MIN", c.MarketRefresh},
 	} {
 		if err := checkDuration(item.name, item.v); err != nil {
@@ -179,6 +189,9 @@ func (c *Config) Validate() error {
 	}
 	if strings.TrimSpace(c.CSVPath) == "" || strings.TrimSpace(c.HeartbeatPath) == "" || strings.TrimSpace(c.LockPath) == "" {
 		return fmt.Errorf("CSV_PATH, HEARTBEAT_PATH and LOCK_PATH must be non-empty")
+	}
+	if strings.TrimSpace(c.KPCooldownPath) == "" {
+		return fmt.Errorf("KP_COOLDOWN_PATH must be non-empty")
 	}
 	for _, item := range []struct {
 		name  string

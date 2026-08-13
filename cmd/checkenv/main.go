@@ -21,8 +21,15 @@ func main() {
 	fmt.Printf("  TELEGRAM_CHAT_ID             len=%d\n", len(cfg.TelegramChatID))
 	fmt.Printf("  CSV_PATH                     %q\n", cfg.CSVPath)
 	fmt.Printf("  DB_PATH                      %q\n", cfg.DBPath)
+	fmt.Printf("  KP_COOLDOWN_PATH             %q\n", cfg.KPCooldownPath)
+	fmt.Printf("  KP_RATE_COOLDOWN_SEC         %.0f\n", cfg.KPRateCooldown.Seconds())
+	fmt.Printf("  KP_CHALLENGE_COOLDOWN_MIN    %.0f\n", cfg.KPChallengeCooldown.Minutes())
+	fmt.Printf("  KP_WATCHDOG_RESEARCH         %v\n", cfg.KPWatchdogResearch)
 
 	fmt.Println()
+	if err := cfg.Validate(); err != nil {
+		fmt.Println("❌ Конфигурация невалидна:", err)
+	}
 	if cfg.GeminiAPIKey == "" {
 		fmt.Println("❌ GEMINI_API_KEY пуст")
 	}

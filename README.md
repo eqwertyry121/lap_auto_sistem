@@ -122,6 +122,8 @@ If Telegram variables are absent, alerts are printed to the console.
 | `MOOSE_MIN_EUR` | `400` | rare-hardware summary minimum |
 | `LOCK_PATH` | `data/kpbot.lock` | singleton process lock |
 | `KP_COOLDOWN_PATH` | `data/kp_cooldown` | shared KP cooldown file |
+| `KP_RATE_COOLDOWN_SEC` | `90` | shared cooldown after KP 429 |
+| `KP_CHALLENGE_COOLDOWN_MIN` | `30` | shared cooldown after KP anti-bot challenge |
 | `KP_WATCHDOG_RESEARCH` | `0` | watchdog does not start research by default |
 
 Config is validated on startup. Invalid intervals, invalid booleans, empty model

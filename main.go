@@ -221,7 +221,9 @@ func main() {
 		SetDailyBudgetUSD(cfg.GeminiDailyBudgetUSD)
 	st.syncGeminiStats(gemini.Stats())
 	tg := notifier.New(cfg.TelegramToken, cfg.TelegramChatID)
-	kp := collector.NewClient()
+	kp := collector.NewClient(collector.WithSharedCooldown(
+		cfg.KPCooldownPath, cfg.KPRateCooldown, cfg.KPChallengeCooldown,
+	))
 	go telegramOutboxLoop(ctx, store, tg, log, st)
 	go dbBackupLoop(ctx, cfg, store, log, st)
 
@@ -288,6 +290,9 @@ func main() {
 
 	log.Info("бот запущен",
 		"poll_interval", cfg.PollInterval.String(),
+		"kp_cooldown_path", cfg.KPCooldownPath,
+		"kp_rate_cooldown", cfg.KPRateCooldown.String(),
+		"kp_challenge_cooldown", cfg.KPChallengeCooldown.String(),
 		"gemini_concurrency", cfg.GeminiConcurrency,
 		"gemini_daily_limit", cfg.GeminiDailyLimit,
 		"gemini_daily_budget_usd", cfg.GeminiDailyBudgetUSD,

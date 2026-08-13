@@ -26,12 +26,12 @@ func (c *Client) FetchDetail(ctx context.Context, adID int64) (*models.AdDetail,
 		return nil, fmt.Errorf("kp eds: чтение тела: %w", err)
 	}
 	if isChallengeBody(body) {
-		recordSharedCooldown(ErrChallenge)
+		c.recordSharedCooldown(ErrChallenge)
 		return nil, ErrChallenge
 	}
 	if resp.StatusCode != http.StatusOK {
 		err := decodeError(resp.StatusCode, string(body))
-		recordSharedCooldown(err)
+		c.recordSharedCooldown(err)
 		return nil, err
 	}
 

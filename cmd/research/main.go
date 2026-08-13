@@ -34,6 +34,8 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/joho/godotenv"
+
 	"kpbot/collector"
 	"kpbot/filters"
 	"kpbot/hb"
@@ -60,6 +62,7 @@ func main() {
 	)
 	flag.Parse()
 
+	_ = godotenv.Load()
 	slog.SetDefault(slog.New(slog.NewTextHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelInfo})))
 	log := slog.Default()
 

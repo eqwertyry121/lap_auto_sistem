@@ -62,17 +62,47 @@ var userAgents = []string{
 }
 
 type Client struct {
-	http  *http.Client
-	uaIdx atomic.Uint64
+	http     *http.Client
+	cooldown CooldownConfig
+	uaIdx    atomic.Uint64
 }
 
-func NewClient() *Client {
-	return &Client{http: &http.Client{Timeout: 30 * time.Second}}
+// CooldownConfig controls the shared KP backoff file used by bot/research.
+type CooldownConfig struct {
+	Path              string
+	RateCooldown      time.Duration
+	ChallengeCooldown time.Duration
+}
+
+type Option func(*Client)
+
+func NewClient(opts ...Option) *Client {
+	c := &Client{
+		http:     &http.Client{Timeout: 30 * time.Second},
+		cooldown: defaultCooldownConfig(),
+	}
+	for _, opt := range opts {
+		if opt != nil {
+			opt(c)
+		}
+	}
+	c.cooldown = c.cooldown.normalized()
+	return c
+}
+
+func WithSharedCooldown(path string, rateCooldown, challengeCooldown time.Duration) Option {
+	return func(c *Client) {
+		c.cooldown = CooldownConfig{
+			Path:              path,
+			RateCooldown:      rateCooldown,
+			ChallengeCooldown: challengeCooldown,
+		}
+	}
 }
 
 // do выполняет GET к /api/web/v1/<pathWithQuery> с обязательной подписью.
 func (c *Client) do(ctx context.Context, pathWithQuery string) (*http.Response, error) {
-	if err := sharedCooldownErr(); err != nil {
+	if err := c.sharedCooldownErr(); err != nil {
 		return nil, err
 	}
 	url := models.BaseURL + pathWithQuery
@@ -94,22 +124,23 @@ func (c *Client) do(ctx context.Context, pathWithQuery string) (*http.Response, 
 	return c.http.Do(req)
 }
 
-func recordSharedCooldown(err error) {
+func (c *Client) recordSharedCooldown(err error) {
 	switch {
 	case errors.Is(err, ErrChallenge):
-		writeSharedCooldown("challenge", kpChallengeCooldown())
+		c.writeSharedCooldown("challenge", c.cooldown.ChallengeCooldown)
 	case errors.Is(err, ErrRateLimited):
-		writeSharedCooldown("rate", kpRateCooldown())
+		c.writeSharedCooldown("rate", c.cooldown.RateCooldown)
 	}
 }
 
-func sharedCooldownErr() error {
-	until, reason, ok := readSharedCooldown(cooldownPath())
+func (c *Client) sharedCooldownErr() error {
+	path := c.cooldown.Path
+	until, reason, ok := readSharedCooldown(path)
 	if !ok {
 		return nil
 	}
 	if time.Now().After(until) {
-		_ = os.Remove(cooldownPath())
+		_ = os.Remove(path)
 		return nil
 	}
 	switch reason {
@@ -120,11 +151,11 @@ func sharedCooldownErr() error {
 	}
 }
 
-func writeSharedCooldown(reason string, d time.Duration) {
+func (c *Client) writeSharedCooldown(reason string, d time.Duration) {
 	if d <= 0 {
 		return
 	}
-	path := cooldownPath()
+	path := c.cooldown.Path
 	until := time.Now().Add(d)
 	if current, _, ok := readSharedCooldown(path); ok && current.After(until) {
 		return
@@ -156,6 +187,18 @@ func writeSharedCooldown(reason string, d time.Duration) {
 	}
 }
 
+func recordSharedCooldown(err error) {
+	NewClient().recordSharedCooldown(err)
+}
+
+func sharedCooldownErr() error {
+	return NewClient().sharedCooldownErr()
+}
+
+func writeSharedCooldown(reason string, d time.Duration) {
+	NewClient().writeSharedCooldown(reason, d)
+}
+
 func readSharedCooldown(path string) (time.Time, string, bool) {
 	data, err := os.ReadFile(path)
 	if err != nil {
@@ -170,6 +213,27 @@ func readSharedCooldown(path string) (time.Time, string, bool) {
 		return time.Time{}, "", false
 	}
 	return time.Unix(unix, 0), fields[1], true
+}
+
+func defaultCooldownConfig() CooldownConfig {
+	return CooldownConfig{
+		Path:              cooldownPath(),
+		RateCooldown:      kpRateCooldown(),
+		ChallengeCooldown: kpChallengeCooldown(),
+	}.normalized()
+}
+
+func (c CooldownConfig) normalized() CooldownConfig {
+	if strings.TrimSpace(c.Path) == "" {
+		c.Path = filepath.Join("data", "kp_cooldown")
+	}
+	if c.RateCooldown <= 0 {
+		c.RateCooldown = 90 * time.Second
+	}
+	if c.ChallengeCooldown <= 0 {
+		c.ChallengeCooldown = 30 * time.Minute
+	}
+	return c
 }
 
 func cooldownPath() string {

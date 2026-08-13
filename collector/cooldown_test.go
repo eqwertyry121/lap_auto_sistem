@@ -63,3 +63,28 @@ func TestSharedCooldownKeepsLongerUntil(t *testing.T) {
 		t.Fatalf("shorter cooldown overwrote longer one: before=%s/%s after=%s/%s", before, reason, after, afterReason)
 	}
 }
+
+func TestClientSharedCooldownUsesConfiguredPath(t *testing.T) {
+	dir := t.TempDir()
+	envPath := filepath.Join(dir, "env_cooldown")
+	configPath := filepath.Join(dir, "configured_cooldown")
+	t.Setenv("KP_COOLDOWN_PATH", envPath)
+
+	client := NewClient(WithSharedCooldown(configPath, 2*time.Second, 3*time.Minute))
+	client.recordSharedCooldown(ErrRateLimited)
+
+	until, reason, ok := readSharedCooldown(configPath)
+	if !ok {
+		t.Fatal("configured cooldown file was not written")
+	}
+	if reason != "rate" {
+		t.Fatalf("reason = %q, want rate", reason)
+	}
+	left := time.Until(until)
+	if left < time.Second || left > 3*time.Second {
+		t.Fatalf("rate cooldown duration = %s, want about 2s", left)
+	}
+	if _, err := os.Stat(envPath); !os.IsNotExist(err) {
+		t.Fatalf("env cooldown path must not be used, stat err=%v", err)
+	}
+}
