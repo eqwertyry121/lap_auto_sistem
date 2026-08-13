@@ -63,7 +63,7 @@ func TestOpenRecordsSchemaMigrationVersion(t *testing.T) {
 	).Scan(&name, &appliedAt); err != nil {
 		t.Fatalf("read schema migration: %v", err)
 	}
-	if name != "storage-main-v3" {
+	if name != "storage-main-v4" {
 		t.Fatalf("migration name = %q", name)
 	}
 	if appliedAt <= 0 {
@@ -111,6 +111,39 @@ func TestDiscoveredListingCanBeClaimedAfterExistingRow(t *testing.T) {
 	}
 	if status != string(models.StatusNew) || process != string(models.ProcessDetailPending) {
 		t.Fatalf("status=%s process=%s, want NEW/DETAIL_PENDING", status, process)
+	}
+}
+
+func TestDiscoveredListingPreservesUserIDForSellerFilters(t *testing.T) {
+	ctx := context.Background()
+	st := openTestStore(t)
+	l := models.Listing{
+		AdID: 77, UserID: 12345, Title: "Laptop", Price: 200, Currency: "EUR", URL: "https://kp/77",
+		CreatedAt: time.Now(),
+	}
+	if err := st.UpsertDiscovered(ctx, l); err != nil {
+		t.Fatalf("upsert discovered: %v", err)
+	}
+
+	withoutUser := l
+	withoutUser.UserID = 0
+	withoutUser.Price = 190
+	if err := st.UpsertDiscovered(ctx, withoutUser); err != nil {
+		t.Fatalf("upsert discovered without user id: %v", err)
+	}
+
+	got, err := st.ClaimDueListings(ctx, []models.ProcessState{models.ProcessDetailPending}, 10, time.Minute)
+	if err != nil {
+		t.Fatalf("claim: %v", err)
+	}
+	if len(got) != 1 {
+		t.Fatalf("claimed %+v, want one listing", got)
+	}
+	if got[0].UserID != 12345 {
+		t.Fatalf("claimed UserID = %d, want preserved seller id 12345", got[0].UserID)
+	}
+	if got[0].Price != 190 {
+		t.Fatalf("claimed Price = %.0f, want latest price 190", got[0].Price)
 	}
 }
 

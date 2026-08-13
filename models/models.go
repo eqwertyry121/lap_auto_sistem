@@ -53,6 +53,7 @@ type Verdict struct {
 
 type Listing struct {
 	AdID           int64
+	UserID         int64
 	Title          string
 	Price          float64
 	Currency       string

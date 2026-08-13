@@ -24,7 +24,7 @@ type Store struct {
 	path string
 }
 
-const storageSchemaVersion = 3
+const storageSchemaVersion = 4
 
 const schema = `
 CREATE TABLE IF NOT EXISTS schema_migrations (
@@ -35,6 +35,7 @@ CREATE TABLE IF NOT EXISTS schema_migrations (
 
 CREATE TABLE IF NOT EXISTS market_listings (
 	ad_id             INTEGER PRIMARY KEY,
+	user_id           INTEGER NOT NULL DEFAULT 0,
 	title             TEXT NOT NULL DEFAULT '',
 	price             REAL NOT NULL DEFAULT 0,
 	currency          TEXT NOT NULL DEFAULT 'EUR',
@@ -153,7 +154,7 @@ func applyStorageSchema(db *sql.DB) error {
 	}
 	if _, err := tx.Exec(
 		`INSERT OR IGNORE INTO schema_migrations (version, name, applied_at) VALUES (?, ?, ?)`,
-		storageSchemaVersion, "storage-main-v3", time.Now().Unix(),
+		storageSchemaVersion, "storage-main-v4", time.Now().Unix(),
 	); err != nil {
 		return fmt.Errorf("record schema migration: %w", err)
 	}
@@ -188,6 +189,7 @@ func migrateListingAudit(db schemaRunner) error {
 		return err
 	}
 	for _, m := range []struct{ col, stmt string }{
+		{"user_id", `ALTER TABLE market_listings ADD COLUMN user_id INTEGER NOT NULL DEFAULT 0`},
 		{"verdict_code", `ALTER TABLE market_listings ADD COLUMN verdict_code TEXT NOT NULL DEFAULT ''`},
 		{"deviation", `ALTER TABLE market_listings ADD COLUMN deviation REAL NOT NULL DEFAULT 0`},
 		{"group_n", `ALTER TABLE market_listings ADD COLUMN group_n INTEGER NOT NULL DEFAULT 0`},
@@ -288,8 +290,8 @@ func (s *Store) InsertListing(ctx context.Context, l models.Listing) error {
 	defer tx.Rollback()
 
 	if _, err := tx.ExecContext(ctx,
-		`INSERT OR IGNORE INTO market_listings (ad_id, title, price, currency, url, status, created_at, process_state, next_attempt_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-		l.AdID, l.Title, l.Price, models.NormalizeCurrency(l.Currency), l.URL, string(l.Status), l.CreatedAt.Unix(), string(l.ProcessState), unixOrZero(l.NextAttemptAt)); err != nil {
+		`INSERT OR IGNORE INTO market_listings (ad_id, user_id, title, price, currency, url, status, created_at, process_state, next_attempt_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		l.AdID, l.UserID, l.Title, l.Price, models.NormalizeCurrency(l.Currency), l.URL, string(l.Status), l.CreatedAt.Unix(), string(l.ProcessState), unixOrZero(l.NextAttemptAt)); err != nil {
 		return err
 	}
 	if err := recordListingObservationTx(ctx, tx, l, "search", l.CreatedAt); err != nil {
@@ -317,9 +319,9 @@ func (s *Store) UpsertDiscovered(ctx context.Context, l models.Listing) error {
 	err = tx.QueryRowContext(ctx, `SELECT status, process_state FROM market_listings WHERE ad_id = ?`, l.AdID).Scan(&status, &state)
 	if err == sql.ErrNoRows {
 		_, err = tx.ExecContext(ctx, `
-INSERT INTO market_listings (ad_id, title, price, currency, url, status, created_at, process_state, next_attempt_at, lease_until)
-VALUES (?, ?, ?, ?, ?, ?, ?, ?, 0, 0)`,
-			l.AdID, l.Title, l.Price, models.NormalizeCurrency(l.Currency), l.URL,
+INSERT INTO market_listings (ad_id, user_id, title, price, currency, url, status, created_at, process_state, next_attempt_at, lease_until)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 0, 0)`,
+			l.AdID, l.UserID, l.Title, l.Price, models.NormalizeCurrency(l.Currency), l.URL,
 			string(models.StatusNew), l.CreatedAt.Unix(), string(models.ProcessDetailPending))
 		if err != nil {
 			return err
@@ -335,8 +337,11 @@ VALUES (?, ?, ?, ?, ?, ?, ?, ?, 0, 0)`,
 
 	if listingClosed(status, state) {
 		_, err = tx.ExecContext(ctx,
-			`UPDATE market_listings SET title = ?, price = ?, currency = ?, url = ? WHERE ad_id = ?`,
-			l.Title, l.Price, models.NormalizeCurrency(l.Currency), l.URL, l.AdID)
+			`UPDATE market_listings
+SET user_id = CASE WHEN ? != 0 THEN ? ELSE user_id END,
+    title = ?, price = ?, currency = ?, url = ?
+WHERE ad_id = ?`,
+			l.UserID, l.UserID, l.Title, l.Price, models.NormalizeCurrency(l.Currency), l.URL, l.AdID)
 	} else {
 		nextState := state
 		if nextState == "" || nextState == string(models.ProcessDiscovered) {
@@ -348,9 +353,10 @@ VALUES (?, ?, ?, ?, ?, ?, ?, ?, 0, 0)`,
 		}
 		_, err = tx.ExecContext(ctx, `
 UPDATE market_listings
-SET title = ?, price = ?, currency = ?, url = ?, status = ?, process_state = ?
+SET user_id = CASE WHEN ? != 0 THEN ? ELSE user_id END,
+    title = ?, price = ?, currency = ?, url = ?, status = ?, process_state = ?
 WHERE ad_id = ?`,
-			l.Title, l.Price, models.NormalizeCurrency(l.Currency), l.URL, nextStatus, nextState, l.AdID)
+			l.UserID, l.UserID, l.Title, l.Price, models.NormalizeCurrency(l.Currency), l.URL, nextStatus, nextState, l.AdID)
 	}
 	if err != nil {
 		return err
@@ -530,7 +536,7 @@ func (s *Store) ClaimDueListings(ctx context.Context, states []models.ProcessSta
 	defer tx.Rollback()
 
 	rows, err := tx.QueryContext(ctx, `
-SELECT ad_id, title, price, currency, url, description, seller, status, process_state,
+SELECT ad_id, user_id, title, price, currency, url, description, seller, status, process_state,
        attempt_count, next_attempt_at, lease_until, last_error, created_at
 FROM market_listings
 WHERE process_state IN (`+strings.Join(ph, ",")+`)
@@ -546,7 +552,7 @@ LIMIT ?`, args...)
 		var l models.Listing
 		var status, state string
 		var nextAt, leaseAt, createdAt int64
-		if err := rows.Scan(&l.AdID, &l.Title, &l.Price, &l.Currency, &l.URL,
+		if err := rows.Scan(&l.AdID, &l.UserID, &l.Title, &l.Price, &l.Currency, &l.URL,
 			&l.Description, &l.Seller, &status, &state, &l.AttemptCount,
 			&nextAt, &leaseAt, &l.LastError, &createdAt); err != nil {
 			rows.Close()

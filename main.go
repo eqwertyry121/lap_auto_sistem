@@ -458,6 +458,7 @@ func discoverFreshListings(ctx context.Context, kp *collector.Client, store *sto
 		for _, ad := range res.Ads {
 			l := models.Listing{
 				AdID:         ad.AdID,
+				UserID:       ad.UserID,
 				Title:        ad.Name,
 				Price:        float64(ad.Price),
 				Currency:     models.NormalizeCurrency(ad.Currency),
@@ -596,6 +597,7 @@ func processDueListings(ctx context.Context, kp *collector.Client, store *storag
 			ad := models.SearchAd{
 				AdID: l.AdID, Name: l.Title, Price: models.FlexFloat(price), Currency: cur,
 				AdURL: adURL, Condition: detail.Condition, KPIzlog: detail.KPIzlog,
+				UserID: l.UserID,
 			}
 			_ = store.MarkProcessState(ctx, l.AdID, models.ProcessEvaluating)
 			out := funnel.Run(ctx, fnl, cfg, gem, log, ad, detail)
