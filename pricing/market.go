@@ -196,57 +196,121 @@ func loadLots(ctx context.Context, dbPath string, rsdRate float64) ([]Lot, error
 	labelJoins := ""
 	sellerLabelExpr := "''"
 	adLabelExpr := "''"
+	sellerJoin := ""
+	specJoin := ""
+	isRenewedExpr := "0"
+	sellerAdsExpr := "0"
+	sellerRecentAdsExpr := "0"
+	sellerTraderSeenExpr := "0"
+	sellerKPIzlogSeenExpr := "0"
+	reviewsExpr := "0"
+	userCreatedExpr := "''"
+	specLaptopModelExpr := "''"
+	specCPUModelExpr := "''"
+	specCPUScoreExpr := "0"
+	specRAMExpr := "0"
+	specSSDExpr := "0"
+	specGPUModelExpr := "''"
+	specGPUScoreExpr := "0"
 	hasLabels := sqliteTableExists(ctx, db, "labels")
-	hasSellerLabel := sqliteColumnExists(ctx, db, "sellers", "label")
-	laptopModelExpr := "''"
-	if sqliteColumnExists(ctx, db, "research_specs", "laptop_model") {
-		laptopModelExpr = "COALESCE(sp.laptop_model,'')"
+	hasSellers := sqliteTableExists(ctx, db, "sellers")
+	hasSpecs := sqliteTableExists(ctx, db, "research_specs")
+	hasUserID := sqliteColumnExists(ctx, db, "research_ads", "user_id")
+	hasFetchedAt := sqliteColumnExists(ctx, db, "research_ads", "fetched_at")
+	hasIsRenewed := sqliteColumnExists(ctx, db, "research_ads", "is_renewed")
+	if hasIsRenewed {
+		isRenewedExpr = "a.is_renewed"
+	}
+	if hasSpecs {
+		specJoin = "LEFT JOIN research_specs sp ON sp.ad_id = a.ad_id"
+		specCPUModelExpr = "COALESCE(sp.cpu_model,'')"
+		specCPUScoreExpr = "COALESCE(sp.cpu_score,0)"
+		specRAMExpr = "COALESCE(sp.ram_gb,0)"
+		specSSDExpr = "COALESCE(sp.ssd_gb,0)"
+		specGPUModelExpr = "COALESCE(sp.gpu_model,'')"
+		specGPUScoreExpr = "COALESCE(sp.gpu_score,0)"
+		if sqliteColumnExists(ctx, db, "research_specs", "laptop_model") {
+			specLaptopModelExpr = "COALESCE(sp.laptop_model,'')"
+		}
 	}
 	if hasLabels {
-		labelJoins = `
-LEFT JOIN labels slbl ON slbl.target_type='seller' AND slbl.target_id = a.user_id
+		if hasUserID {
+			labelJoins += `
+LEFT JOIN labels slbl ON slbl.target_type='seller' AND slbl.target_id = a.user_id`
+			sellerLabelExpr = "COALESCE(slbl.label,'')"
+		}
+		labelJoins += `
 LEFT JOIN labels albl ON albl.target_type='ad' AND albl.target_id = a.ad_id`
-		sellerLabelExpr = "COALESCE(slbl.label,'')"
 		adLabelExpr = "COALESCE(albl.label,'')"
 	}
-	if hasSellerLabel {
+	if hasSellers && hasUserID {
+		sellerJoin = "LEFT JOIN sellers sel ON sel.user_id = a.user_id"
+		sellerTraderSeenExpr = "COALESCE(sel.trader_seen,0)"
+		sellerKPIzlogSeenExpr = "COALESCE(sel.kpizlog_seen,0)"
+		reviewsExpr = "COALESCE(sel.reviews,0)"
+		userCreatedExpr = "COALESCE(sel.user_created,'')"
+	}
+	if hasSellers && hasUserID && sqliteColumnExists(ctx, db, "sellers", "label") {
 		if hasLabels {
 			sellerLabelExpr = "COALESCE(slbl.label, sel.label, '')"
 		} else {
 			sellerLabelExpr = "COALESCE(sel.label, '')"
 		}
 	}
-
-	recentSince := time.Now().Add(-30 * 24 * time.Hour).Unix()
-	rows, err := db.QueryContext(ctx, fmt.Sprintf(`
-SELECT a.ad_id, a.title, a.url, a.price, a.currency, a.posted, a.kind,
-	a.description, a.seller, a.is_trader, a.kp_izlog, a.is_renewed,
-	COALESCE(sa.ads_count,0), COALESCE(sra.recent_ads_count,0),
-	COALESCE(sel.trader_seen,0), COALESCE(sel.kpizlog_seen,0),
-	COALESCE(sel.reviews,0), COALESCE(sel.user_created,''),
-	%s, %s,
-	%s,
-	COALESCE(sp.cpu_model,''), COALESCE(sp.cpu_score,0), COALESCE(sp.ram_gb,0),
-	COALESCE(sp.ssd_gb,0), COALESCE(sp.gpu_model,''), COALESCE(sp.gpu_score,0)
-FROM research_ads a
-LEFT JOIN research_specs sp ON sp.ad_id = a.ad_id
-LEFT JOIN sellers sel ON sel.user_id = a.user_id
-%s
+	sellerActivityJoins := ""
+	if hasUserID {
+		sellerAdsExpr = "COALESCE(sa.ads_count,0)"
+		sellerActivityJoins += `
 LEFT JOIN (
 	SELECT user_id, COUNT(*) AS ads_count
 	FROM research_ads
 	WHERE user_id != 0
 	GROUP BY user_id
-) sa ON sa.user_id = a.user_id
+) sa ON sa.user_id = a.user_id`
+		if hasFetchedAt {
+			sellerRecentAdsExpr = "COALESCE(sra.recent_ads_count,0)"
+			sellerActivityJoins += `
 LEFT JOIN (
 	SELECT user_id, COUNT(*) AS recent_ads_count
 	FROM research_ads
 	WHERE user_id != 0 AND fetched_at >= ?
 	GROUP BY user_id
-) sra ON sra.user_id = a.user_id
+) sra ON sra.user_id = a.user_id`
+		}
+	}
+
+	recentSince := time.Now().Add(-30 * 24 * time.Hour).Unix()
+	args := []any{}
+	if hasUserID && hasFetchedAt {
+		args = append(args, recentSince)
+	}
+	rows, err := db.QueryContext(ctx, fmt.Sprintf(`
+SELECT a.ad_id, a.title, a.url, a.price, a.currency, a.posted, a.kind,
+	a.description, a.seller, a.is_trader, a.kp_izlog, %s,
+	%s, %s,
+	%s, %s,
+	%s, %s,
+	%s, %s,
+	%s,
+	%s, %s, %s,
+	%s, %s, %s
+FROM research_ads a
+%s
+%s
+%s
+%s
 WHERE a.fetch_status='OK'
   AND a.kind='USED'
-  AND a.url != ''`, sellerLabelExpr, adLabelExpr, laptopModelExpr, labelJoins), recentSince)
+  AND a.url != ''`,
+		isRenewedExpr,
+		sellerAdsExpr, sellerRecentAdsExpr,
+		sellerTraderSeenExpr, sellerKPIzlogSeenExpr,
+		reviewsExpr, userCreatedExpr,
+		sellerLabelExpr, adLabelExpr,
+		specLaptopModelExpr,
+		specCPUModelExpr, specCPUScoreExpr, specRAMExpr,
+		specSSDExpr, specGPUModelExpr, specGPUScoreExpr,
+		specJoin, sellerJoin, labelJoins, sellerActivityJoins), args...)
 	if err != nil {
 		return nil, err
 	}

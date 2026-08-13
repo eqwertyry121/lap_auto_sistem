@@ -294,6 +294,79 @@ VALUES (?, 'i5-1135G7', 10000, 16, 512)`, adID); err != nil {
 	}
 }
 
+func TestLoadMarketToleratesLegacySchemaWithoutSellerTables(t *testing.T) {
+	dbPath := filepath.Join(t.TempDir(), "research.db")
+	db, err := sql.Open("sqlite", dbPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	schema := `
+CREATE TABLE research_ads (
+	ad_id INTEGER PRIMARY KEY,
+	title TEXT NOT NULL DEFAULT '',
+	url TEXT NOT NULL DEFAULT '',
+	price REAL NOT NULL DEFAULT 0,
+	currency TEXT NOT NULL DEFAULT 'EUR',
+	posted TEXT NOT NULL DEFAULT '',
+	kind TEXT NOT NULL DEFAULT 'UNKNOWN',
+	description TEXT NOT NULL DEFAULT '',
+	seller TEXT NOT NULL DEFAULT '',
+	is_trader INTEGER NOT NULL DEFAULT 0,
+	kp_izlog INTEGER NOT NULL DEFAULT 0,
+	fetch_status TEXT NOT NULL DEFAULT ''
+);
+CREATE TABLE research_specs (
+	ad_id INTEGER PRIMARY KEY,
+	cpu_model TEXT NOT NULL DEFAULT '',
+	cpu_score REAL NOT NULL DEFAULT 0,
+	ram_gb INTEGER NOT NULL DEFAULT 0,
+	ssd_gb INTEGER NOT NULL DEFAULT 0,
+	gpu_model TEXT NOT NULL DEFAULT '',
+	gpu_score REAL NOT NULL DEFAULT 0
+);`
+	if _, err := db.Exec(schema); err != nil {
+		t.Fatal(err)
+	}
+	posted := time.Now().Format("2006-01-02 15:04:05")
+	for i := 0; i < 8; i++ {
+		adID := int64(i + 1)
+		if _, err := db.Exec(`
+INSERT INTO research_ads (
+	ad_id, title, url, price, currency, posted, kind, description, seller,
+	is_trader, kp_izlog, fetch_status
+) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)`,
+			adID, fmt.Sprintf("Legacy private laptop %d", i), fmt.Sprintf("https://kp.test/legacy-%d", adID),
+			300+float64(i), "EUR", posted, "USED", "Prodajem svoj laptop.", "Marko",
+			0, 0, "OK"); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := db.Exec(`
+INSERT INTO research_specs (ad_id, cpu_model, cpu_score, ram_gb, ssd_gb)
+VALUES (?, 'i5-1135G7', 10000, 16, 512)`, adID); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := db.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	m, err := LoadMarket(context.Background(), dbPath, Options{
+		MedianWindowDays:  60,
+		HedonicWindowDays: 90,
+		RSDEurRate:        117.2,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := len(m.Pool()); got != 8 {
+		t.Fatalf("legacy schema pool = %d, want 8", got)
+	}
+	est := m.EstimateFor(mkLot(999, "i5-1135G7", 10000, 16, 512, 300, 1))
+	if est.Level != "K0" {
+		t.Fatalf("legacy schema estimate level = %q, want K0", est.Level)
+	}
+}
+
 func TestLoadMarketExcludesStaleBulkSellerAsUnknown(t *testing.T) {
 	dbPath := filepath.Join(t.TempDir(), "research.db")
 	db, err := sql.Open("sqlite", dbPath)
