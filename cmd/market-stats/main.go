@@ -1,5 +1,5 @@
 // market-stats — быстрый обзор собранной рыночной базы: сколько лотов,
-// распределение цен по валютам, медиана/среднее.
+// распределение цен по валютам, медиана и квартили.
 package main
 
 import (
@@ -59,7 +59,6 @@ func main() {
 	}
 	fmt.Printf("Мин:    €%.0f\n", prices[0])
 	fmt.Printf("Медиана:€%.0f\n", percentile(prices, 0.5))
-	fmt.Printf("Среднее:€%.0f\n", mean(prices))
 	fmt.Printf("P25:    €%.0f\n", percentile(prices, 0.25))
 	fmt.Printf("P75:    €%.0f\n", percentile(prices, 0.75))
 	fmt.Printf("Макс:   €%.0f\n", prices[len(prices)-1])
@@ -87,17 +86,6 @@ func percentile(sorted []float64, q float64) float64 {
 	}
 	idx := int(q * float64(len(sorted)-1))
 	return sorted[idx]
-}
-
-func mean(xs []float64) float64 {
-	if len(xs) == 0 {
-		return 0
-	}
-	var s float64
-	for _, x := range xs {
-		s += x
-	}
-	return s / float64(len(xs))
 }
 
 func bar(n, total int) string {
