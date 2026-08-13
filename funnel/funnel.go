@@ -141,6 +141,7 @@ type l5Input struct {
 	JunkClass        string  // CLEAN / DEFECT / BROKEN_UNCERTAIN
 	CPUName          string  // имя CPU (даже без балла); пусто = не определён
 	CPUScore         float64 // 0 = CPU вне эталона hw.db
+	ConfigConflict   bool    // источники L3 дали противоречивые характеристики
 	DevOK            bool
 	Dev              float64
 	N                int
@@ -168,6 +169,9 @@ func decideL5(in l5Input) string {
 	}
 	if in.CPUScore <= 0 {
 		return vcCheck // медиана есть, но CPU вне эталона — проверить
+	}
+	if in.ConfigConflict {
+		return vcCheck // противоречивые источники L3 — не выбираем победителя автоматически
 	}
 	if in.Dominated || in.StepUpOutclassed {
 		return vcOutclassed
@@ -378,20 +382,53 @@ func Run(ctx context.Context, f *Funnel, cfg *config.Config, gem *vision.GeminiC
 		tr.f("L3.1 regex: явно указана только встроенная графика")
 	}
 	via := "regex"
+	cpuVia := ""
+	if cpuModel != "" {
+		cpuVia = "regex"
+	}
+	gpuVia := ""
+	if gpuModel != "" || integratedGPU {
+		gpuVia = "regex"
+	}
+	ramVia := ""
+	if recognized.RAMGB > 0 {
+		ramVia = "regex"
+	}
+	ssdVia := ""
+	if recognized.SSDGB > 0 {
+		ssdVia = "regex"
+	}
+	var configConflicts []string
+	addConflict := func(field, oldVia, oldValue, newVia, newValue string) {
+		if oldVia == "" {
+			oldVia = "previous"
+		}
+		reason := fmt.Sprintf("%s conflict: %s=%q vs %s=%q", field, oldVia, oldValue, newVia, newValue)
+		configConflicts = append(configConflicts, reason)
+		tr.f("L3.conflict: %s", reason)
+	}
 	merge := func(stage, viaName string, gs specs.GeminiSpecs) {
 		if gs.LaptopModel != "" && (laptopModel == "" || len(gs.LaptopModel) > len(laptopModel)) {
 			laptopModel = gs.LaptopModel
 			tr.f("%s: модель ноутбука: %s", stage, laptopModel)
 		}
 		if m, s := matchCPU(cpus, gs.CPU); s > 0 {
+			if hardwareConflict(cpuModel, m) {
+				addConflict("cpu", cpuVia, cpuModel, viaName, m)
+			}
 			cpuModel, cpuScore = m, s
+			cpuVia = viaName
 			via = viaName
 			tr.f("%s: CPU принят: %s (балл %.0f)", stage, cpuModel, cpuScore)
 		} else if gs.CPU != "" {
 			// CPU назван, но в эталоне hw.db его (ещё) нет: имя сохраняем —
 			// лот пойдёт дальше с пометкой «нет балла», а не в MANUAL.
+			if hardwareConflict(cpuModel, gs.CPU) {
+				addConflict("cpu", cpuVia, cpuModel, viaName, gs.CPU)
+			}
 			if cpuModel == "" {
 				cpuModel = gs.CPU
+				cpuVia = viaName
 				via = viaName
 			}
 			tr.f("%s: Gemini назвал %q — в эталоне hw.db нет, балл 0 (имя сохранено)", stage, gs.CPU)
@@ -402,26 +439,51 @@ func Run(ctx context.Context, f *Funnel, cfg *config.Config, gem *vision.GeminiC
 			}
 		}
 		if gs.GPUIntegrated() {
-			integratedGPU = true
+			if gpuModel != "" {
+				addConflict("gpu", gpuVia, gpuModel, viaName, "integrated")
+			} else {
+				integratedGPU = true
+				gpuVia = viaName
+			}
 		} else if strings.TrimSpace(gs.GPU) != "" {
 			// Имя dGPU храним даже если его ещё нет в hw.db (балл 0):
 			// присутствие дискретной графики важнее балла (PLAN_v5, Фаза A).
 			gm, gs2 := matchGPU(gpus, gs.GPU)
+			if integratedGPU {
+				addConflict("gpu", gpuVia, "integrated", viaName, gm)
+			}
+			if hardwareConflict(gpuModel, gm) {
+				addConflict("gpu", gpuVia, gpuModel, viaName, gm)
+			}
 			if gpuModel == "" {
 				gpuModel = gm
+				gpuVia = viaName
 			}
 			if gs2 > gpuScore {
 				gpuModel, gpuScore = gm, gs2
+				gpuVia = viaName
 			}
 			if gpuModel != "" {
 				integratedGPU = false
 			}
 		}
+		if recognized.RAMGB > 0 && gs.RAMGB > 0 && recognized.RAMGB != gs.RAMGB {
+			addConflict("ram", ramVia, fmt.Sprintf("%dGB", recognized.RAMGB), viaName, fmt.Sprintf("%dGB", gs.RAMGB))
+		}
 		if recognized.RAMGB == 0 {
 			recognized.RAMGB = gs.RAMGB
+			if gs.RAMGB > 0 {
+				ramVia = viaName
+			}
+		}
+		if recognized.SSDGB > 0 && gs.SSDGB > 0 && recognized.SSDGB != gs.SSDGB {
+			addConflict("ssd", ssdVia, fmt.Sprintf("%dGB", recognized.SSDGB), viaName, fmt.Sprintf("%dGB", gs.SSDGB))
 		}
 		if recognized.SSDGB == 0 {
 			recognized.SSDGB = gs.SSDGB
+			if gs.SSDGB > 0 {
+				ssdVia = viaName
+			}
 		}
 	}
 
@@ -523,6 +585,10 @@ func Run(ctx context.Context, f *Funnel, cfg *config.Config, gem *vision.GeminiC
 
 	specsLine := buildSpecsLine(laptopModel, cpuModel, recognized.RAMGB, recognized.SSDGB, gpuModel, integratedGPU)
 	tr.f("L3 итог: конфигурация = %s (источник: %s)", specsLine, via)
+	configConflictReason := strings.Join(configConflicts, "; ")
+	if configConflictReason != "" {
+		tr.f("L3 итог: конфликт источников — %s", configConflictReason)
+	}
 	if cpuModel != "" && cpuScore <= 0 {
 		tr.f("L3: CPU %q назван, но в эталоне hw.db нет балла — лот идёт дальше без CPU-гейтов", cpuModel)
 	}
@@ -642,13 +708,18 @@ func Run(ctx context.Context, f *Funnel, cfg *config.Config, gem *vision.GeminiC
 	}
 
 	// Некритичный дефект не блокирует — «хороший, но с нюансом».
-	nuance := ""
+	nuanceParts := []string{}
 	if junk.Class == filters.JunkDefect {
-		nuance = strings.Join(junk.Reasons, "; ")
+		nuanceParts = append(nuanceParts, strings.Join(junk.Reasons, "; "))
 	}
+	if configConflictReason != "" {
+		nuanceParts = append(nuanceParts, "конфликт характеристик: "+configConflictReason)
+	}
+	nuance := strings.Join(nuanceParts, "; ")
 
 	code := decideL5(l5Input{
 		JunkClass: junk.Class, CPUName: cpuModel, CPUScore: cpuScore, DevOK: devOK, Dev: dev, N: est.N,
+		ConfigConflict:   len(configConflicts) > 0,
 		Dominated:        eval.DominatedBy != nil,
 		StepUpOutclassed: stepUpOutclassed,
 		YoungSeller:      seller.AgeDays() >= 0 && seller.AgeDays() < 30,
@@ -700,6 +771,9 @@ func Run(ctx context.Context, f *Funnel, cfg *config.Config, gem *vision.GeminiC
 	}
 	if diamondSuppressedReason != "" {
 		marketRef += "; diamond_suppressed=" + diamondSuppressedReason
+	}
+	if configConflictReason != "" {
+		marketRef += "; config_conflict=" + configConflictReason
 	}
 	audit := storage.FunnelVerdict{
 		Code: code, Deviation: dev, GroupN: est.N, Alternatives: string(altsJSON),
@@ -830,6 +904,17 @@ func matchGPU(gpus map[string]hw.GPU, name string) (string, float64) {
 		return g.Name, g.Score
 	}
 	return name, 0
+}
+
+func hardwareKey(name string) string {
+	return hw.Key(name)
+}
+
+func hardwareConflict(a, b string) bool {
+	if strings.TrimSpace(a) == "" || strings.TrimSpace(b) == "" {
+		return false
+	}
+	return hardwareKey(a) != hardwareKey(b)
 }
 
 func buildSpecsLine(laptop, cpu string, ram, ssd int, gpu string, integratedGPU bool) string {

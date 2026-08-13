@@ -95,6 +95,17 @@ func TestDecideL5(t *testing.T) {
 	}
 }
 
+func TestDecideL5ConfigConflictForcesCheck(t *testing.T) {
+	in := l5Input{
+		JunkClass: filters.JunkClean, CPUName: "i5-1135G7", CPUScore: 10000,
+		DevOK: true, Dev: -0.20, N: 10, ConfigConflict: true,
+		diamondDev: -0.15, suspectDev: -0.40, marketTol: 0.05, minN: 5,
+	}
+	if got := decideL5(in); got != vcCheck {
+		t.Fatalf("config conflict got %s, want CHECK", got)
+	}
+}
+
 func TestDecideL5DominatedDiamond(t *testing.T) {
 	in := l5Input{
 		JunkClass: filters.JunkClean, CPUName: "i5-1135G7", CPUScore: 10000,
@@ -221,6 +232,18 @@ func TestMatchCPUFallsBackFromRyzenProToBaseSKU(t *testing.T) {
 	name, score = matchCPU(cpus, "Ryzen AI 7 PRO 350")
 	if name != "AMD Ryzen AI 7 350" || score != 15016 {
 		t.Fatalf("Ryzen AI PRO fallback match = %q %.0f", name, score)
+	}
+}
+
+func TestHardwareConflictNormalization(t *testing.T) {
+	if hardwareConflict("Intel Core i7-10510U", "i7-10510U") {
+		t.Fatal("normalized aliases for the same CPU must not conflict")
+	}
+	if !hardwareConflict("i7-10510U", "i7-10850H") {
+		t.Fatal("different CPUs must conflict")
+	}
+	if hardwareConflict("", "i7-10510U") {
+		t.Fatal("missing previous evidence must not be treated as conflict")
 	}
 }
 
