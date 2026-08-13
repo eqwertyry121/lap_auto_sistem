@@ -183,13 +183,24 @@ func TestWithoutProductionOLSKeepsAlternatives(t *testing.T) {
 }
 
 func TestDiamondSuppressionAllowsKnownIntegratedGPU(t *testing.T) {
-	got := diamondSuppressionReason(pricing.PriceEstimate{Level: "K0"}, 0, true, "used", true)
+	got := diamondSuppressionReason(pricing.PriceEstimate{Level: "K0"}, 0, true, "used", true, filters.ClassPrivate)
 	if got != "" {
 		t.Fatalf("known integrated GPU must not be suppressed as unknown GPU: %q", got)
 	}
-	got = diamondSuppressionReason(pricing.PriceEstimate{Level: "K0"}, 0, false, "used", true)
+	got = diamondSuppressionReason(pricing.PriceEstimate{Level: "K0"}, 0, false, "used", true, filters.ClassPrivate)
 	if !strings.Contains(got, "unknown GPU score") {
 		t.Fatalf("unknown GPU must still suppress diamond, got %q", got)
+	}
+}
+
+func TestDiamondSuppressionRejectsUnknownSellerClass(t *testing.T) {
+	got := diamondSuppressionReason(pricing.PriceEstimate{Level: "K0"}, 1000, false, "used", true, filters.ClassUnknown)
+	if !strings.Contains(got, "unknown seller type") {
+		t.Fatalf("unknown seller class must suppress diamond, got %q", got)
+	}
+	got = diamondSuppressionReason(pricing.PriceEstimate{Level: "K0"}, 1000, false, "used", false, filters.ClassPrivate)
+	if !strings.Contains(got, "unknown seller type") {
+		t.Fatalf("missing seller record must suppress diamond, got %q", got)
 	}
 }
 

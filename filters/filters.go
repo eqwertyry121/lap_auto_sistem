@@ -12,7 +12,7 @@ import (
 const (
 	ClassShop    = "SHOP"    // L1: магазин/перекуп
 	ClassPrivate = "PRIVATE" // L1: частник
-	ClassUnknown = "UNKNOWN" // L1: данных мало; трактуется как PRIVATE (принцип 7)
+	ClassUnknown = "UNKNOWN" // L1: слабые коммерческие маркеры есть, но порога SHOP не хватило
 
 	JunkClean     = "CLEAN"            // L2: чистый лот
 	JunkPartsOnly = "PARTS_ONLY"       // L2: труп/запчасти — жёсткий блок
@@ -87,7 +87,7 @@ const (
 // (регрессия в models/models_test.go). Поведенческие подсчёты используются
 // консервативно: история торговца/витрины режет сразу, много лотов режет
 // только на высоком пороге или в связке с автообновлением/отзывами/маркерами.
-// UNKNOWN трактуруется вызывающим кодом как PRIVATE.
+// UNKNOWN означает не чистого частника, а слабые shop-маркеры ниже порога.
 func L1(f AdFacts) Verdict {
 	switch manualLabel(f.SellerLabel) {
 	case "SHOP":
@@ -180,7 +180,7 @@ func L1(f AdFacts) Verdict {
 		// маркеры были, но порога не хватило — запоминаем для аудита
 		return Verdict{ClassUnknown, reasons}
 	}
-	return Verdict{ClassUnknown, nil}
+	return Verdict{ClassPrivate, nil}
 }
 
 // ---------- L2: фильтр хлама ----------

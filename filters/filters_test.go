@@ -53,8 +53,22 @@ func TestL1_PrivateSellerPasses(t *testing.T) {
 		Description: "Prodajem laptop, kupljen 2019. godine, ocuvan, baterija drzi oko 3 sata. Licno preuzimanje Novi Beograd.",
 		SellerAds:   1, SellerAgeDays: 800,
 	})
-	if v.Class == ClassShop {
-		t.Fatalf("частник ошибочно срезан: %v", v.Reasons)
+	if v.Class != ClassPrivate {
+		t.Fatalf("частник должен быть PRIVATE, got %s: %v", v.Class, v.Reasons)
+	}
+}
+
+func TestL1_WeakCommercialMarkersAreUnknown(t *testing.T) {
+	v := L1(AdFacts{
+		Title:       "Lenovo ThinkPad T480 i5-8250U",
+		Description: "Laptop je ocuvan, dajem garancija 7 dana.",
+		SellerAds:   1,
+	})
+	if v.Class != ClassUnknown {
+		t.Fatalf("weak commercial marker must be UNKNOWN, got %s: %v", v.Class, v.Reasons)
+	}
+	if len(v.Reasons) == 0 {
+		t.Fatal("UNKNOWN seller verdict must keep reasons")
 	}
 }
 

@@ -242,7 +242,7 @@ func withoutProductionOLS(eval pricing.MarketEvaluation) (pricing.MarketEvaluati
 	return eval, true
 }
 
-func diamondSuppressionReason(est pricing.PriceEstimate, gpuScore float64, integratedGPU bool, condition string, sellerFound bool) string {
+func diamondSuppressionReason(est pricing.PriceEstimate, gpuScore float64, integratedGPU bool, condition string, sellerFound bool, sellerClass string) string {
 	var reasons []string
 	if est.Level == "K3" {
 		reasons = append(reasons, "K3/OLS price estimate")
@@ -253,7 +253,7 @@ func diamondSuppressionReason(est pricing.PriceEstimate, gpuScore float64, integ
 	if strings.TrimSpace(condition) == "" {
 		reasons = append(reasons, "unknown condition")
 	}
-	if !sellerFound {
+	if !sellerFound || sellerClass == filters.ClassUnknown {
 		reasons = append(reasons, "unknown seller type")
 	}
 	return strings.Join(reasons, "; ")
@@ -325,13 +325,18 @@ func Run(ctx context.Context, f *Funnel, cfg *config.Config, gem *vision.GeminiC
 		Reviews:       reviews, SellerTraderSeen: seller.TraderSeen,
 		SellerKPIzlogSeen: seller.KPIzlogSeen,
 	}
-	if v := filters.L1(facts); v.Class == filters.ClassShop {
+	sellerVerdict := filters.L1(facts)
+	if sellerVerdict.Class == filters.ClassShop {
 		bump("L1_SHOP")
-		tr.f("L1: МАГАЗИН — %s → итог SHOP (тихо)", strings.Join(v.Reasons, "; "))
+		tr.f("L1: МАГАЗИН — %s → итог SHOP (тихо)", strings.Join(sellerVerdict.Reasons, "; "))
 		flush()
-		return silent(vcShop, strings.Join(v.Reasons, "; "))
+		return silent(vcShop, strings.Join(sellerVerdict.Reasons, "; "))
 	}
-	tr.f("L1: пройден (нет магазинных признаков: ни меток KP, ни маркеров текста)")
+	if sellerVerdict.Class == filters.ClassUnknown {
+		tr.f("L1: UNKNOWN — слабые коммерческие маркеры ниже порога: %s", strings.Join(sellerVerdict.Reasons, "; "))
+	} else {
+		tr.f("L1: PRIVATE — нет магазинных признаков: ни меток KP, ни маркеров текста")
+	}
 
 	// ---- L2: хлам ----
 	junk := filters.L2(facts)
@@ -657,7 +662,7 @@ func Run(ctx context.Context, f *Funnel, cfg *config.Config, gem *vision.GeminiC
 
 	diamondSuppressedReason := ""
 	if code == vcDiamond || code == vcSuspect {
-		diamondSuppressedReason = diamondSuppressionReason(est, gpuScore, integratedGPU, detail.Condition, seller.Found)
+		diamondSuppressedReason = diamondSuppressionReason(est, gpuScore, integratedGPU, detail.Condition, seller.Found, sellerVerdict.Class)
 		if diamondSuppressedReason != "" {
 			code = vcSuppressed
 			tr.f("L5 anti-diamond: suppressed because %s", diamondSuppressedReason)
