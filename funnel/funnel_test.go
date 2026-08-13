@@ -262,7 +262,7 @@ func TestValueAlertTextSeparatesComparableMarketAndCeiling(t *testing.T) {
 			t.Fatalf("alert text missing %q:\n%s", want, text)
 		}
 	}
-	for _, forbidden := range []string{"Opportunity ceiling", "Рыночный ориентир (наши данные KP)"} {
+	for _, forbidden := range []string{"Opportunity ceiling", "Рыночный ориентир (наши данные KP)", "Средняя цена", "средняя цена"} {
 		if strings.Contains(text, forbidden) {
 			t.Fatalf("alert text contains old wording %q:\n%s", forbidden, text)
 		}
