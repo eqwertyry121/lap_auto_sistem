@@ -1086,6 +1086,37 @@ func TestBestStepUpRequiresURL(t *testing.T) {
 	}
 }
 
+func TestBestStepUpRequiresConditionNotWorse(t *testing.T) {
+	target := mkLotFull(1, 6871, 47062, 550, 1)
+	target.Kind = "NEW"
+	usedStep := mkLotFull(2, 6871, 60000, 551, 1)
+	usedStep.Kind = "USED"
+	m := marketWithDGPU(t, []Lot{target, usedStep}, 60)
+
+	if steps := m.BestStepUp(target, 60, 1); len(steps) != 0 {
+		t.Fatalf("steps = %+v, want no step-up with worse condition", steps)
+	}
+	if ev := m.Evaluate(target); ev.StepUp != nil {
+		t.Fatalf("Evaluate.StepUp = %+v, want nil with worse condition", ev.StepUp)
+	}
+}
+
+func TestOutclassesValueRequiresConditionNotWorse(t *testing.T) {
+	target := mkLotFull(1, 6871, 47062, 550, 1)
+	target.Kind = "NEW"
+	usedCandidate := mkLotFull(2, 12000, 80000, 500, 1)
+	usedCandidate.Kind = "USED"
+	if outclassesValue(target, usedCandidate) {
+		t.Fatal("USED candidate must not outclass a NEW target")
+	}
+
+	usedTarget := target
+	usedTarget.Kind = "USED"
+	if !outclassesValue(usedTarget, usedCandidate) {
+		t.Fatal("stronger USED candidate must still outclass a USED target")
+	}
+}
+
 func TestAcer194438629NoStepUpWithoutURL(t *testing.T) {
 	target := mkLotFull(194438629, 6871, 47062, 200, 1)
 	noURL := mkLotFull(194288556, 6871, 48062, 210, 1)

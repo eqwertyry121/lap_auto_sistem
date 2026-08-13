@@ -272,6 +272,26 @@ func knownCondition(condition string) bool {
 	}
 }
 
+func listingCondition(detailCondition, searchCondition string) string {
+	if strings.TrimSpace(detailCondition) != "" {
+		return detailCondition
+	}
+	return searchCondition
+}
+
+func conditionKind(condition string) string {
+	switch strings.ToLower(strings.TrimSpace(condition)) {
+	case "new", "novo":
+		return "NEW"
+	case "used", "polovno":
+		return "USED"
+	case "broken":
+		return "BROKEN"
+	default:
+		return "UNKNOWN"
+	}
+}
+
 // Outcome — результат прогона для вызывающего кода.
 type Outcome struct {
 	Code      string
@@ -661,6 +681,7 @@ func Run(ctx context.Context, f *Funnel, cfg *config.Config, gem *vision.GeminiC
 	}
 
 	// ---- L4: цена/качество ----
+	condition := listingCondition(detail.Condition, ad.Condition)
 	if market == nil {
 		tr.f("L4: рыночная модель ещё не загружена → итог NO_MARKET (тихо)")
 		flush()
@@ -668,7 +689,7 @@ func Run(ctx context.Context, f *Funnel, cfg *config.Config, gem *vision.GeminiC
 	}
 	lot := pricing.Lot{
 		AdID: ad.AdID, Title: ad.Name, URL: ad.URL(), Price: priceEUR,
-		Kind: "USED", LaptopModel: laptopModel, CPUModel: cpuModel, CPUScore: cpuScore,
+		Kind: conditionKind(condition), LaptopModel: laptopModel, CPUModel: cpuModel, CPUScore: cpuScore,
 		RAMGB: recognized.RAMGB, SSDGB: recognized.SSDGB, GPUModel: gpuModel, GPUScore: gpuScore,
 	}
 	eval := market.Evaluate(lot)
@@ -747,7 +768,7 @@ func Run(ctx context.Context, f *Funnel, cfg *config.Config, gem *vision.GeminiC
 
 	diamondSuppressedReason := ""
 	if code == vcDiamond || code == vcSuspect {
-		diamondSuppressedReason = diamondSuppressionReason(est, gpuScore, integratedGPU, detail.Condition, seller.Found, sellerVerdict.Class)
+		diamondSuppressedReason = diamondSuppressionReason(est, gpuScore, integratedGPU, condition, seller.Found, sellerVerdict.Class)
 		if diamondSuppressedReason != "" {
 			code = vcSuppressed
 			tr.f("L5 anti-diamond: suppressed because %s", diamondSuppressedReason)

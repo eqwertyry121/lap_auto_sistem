@@ -136,6 +136,9 @@ func (m *Market) BestStepUp(target Lot, windowDays, limit int) []Lot {
 		if l.AdID == target.AdID {
 			continue
 		}
+		if !conditionNotWorse(target, l) {
+			continue
+		}
 		dComp := l.Composite() - targetComp
 		dPrice := l.Price - target.Price
 		if dComp <= 0 || dPrice <= 0 {

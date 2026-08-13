@@ -230,6 +230,33 @@ func TestDiamondSuppressionRejectsUnknownConditionValues(t *testing.T) {
 	}
 }
 
+func TestConditionKindUsesDetailWithSearchFallback(t *testing.T) {
+	if got := listingCondition("", "used"); got != "used" {
+		t.Fatalf("listingCondition fallback = %q, want used", got)
+	}
+	if got := listingCondition("new", "used"); got != "new" {
+		t.Fatalf("listingCondition detail priority = %q, want new", got)
+	}
+
+	cases := []struct {
+		condition string
+		want      string
+	}{
+		{"new", "NEW"},
+		{"novo", "NEW"},
+		{"used", "USED"},
+		{"polovno", "USED"},
+		{"broken", "BROKEN"},
+		{"", "UNKNOWN"},
+		{"nije navedeno", "UNKNOWN"},
+	}
+	for _, c := range cases {
+		if got := conditionKind(c.condition); got != c.want {
+			t.Fatalf("conditionKind(%q) = %q, want %q", c.condition, got, c.want)
+		}
+	}
+}
+
 func TestMatchCPUFallsBackFromRyzenProToBaseSKU(t *testing.T) {
 	cpus := map[string]hw.CPU{
 		hw.Key("AMD Ryzen 7 PRO 8840HS"): {Name: "AMD Ryzen 7 PRO 8840HS", Score: 16168},

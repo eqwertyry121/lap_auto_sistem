@@ -853,6 +853,9 @@ func outclassesValue(target, candidate Lot) bool {
 	if target.Price <= 0 || candidate.Price <= 0 {
 		return false
 	}
+	if !conditionNotWorse(target, candidate) {
+		return false
+	}
 	if candidate.CPUScore <= 0 || target.CPUScore <= 0 || candidate.CPUScore < target.CPUScore {
 		return false
 	}
@@ -877,6 +880,23 @@ func outclassesValue(target, candidate Lot) bool {
 		return powerGain >= competitiveCapStrongerPct
 	}
 	return powerGain >= stepUpPowerGainMinMarket && (valueRatio >= stepUpValueRatioMinMarket || marginalEURPer1000 <= maxMarginalEURPer1000)
+}
+
+func conditionNotWorse(target, candidate Lot) bool {
+	return conditionRank(candidate.Kind) >= conditionRank(target.Kind)
+}
+
+func conditionRank(kind string) int {
+	switch strings.ToUpper(strings.TrimSpace(kind)) {
+	case "NEW":
+		return 3
+	case "USED":
+		return 2
+	case "BROKEN":
+		return 0
+	default:
+		return 1
+	}
 }
 
 func (m *Market) Deviation(l Lot) (float64, bool) {
