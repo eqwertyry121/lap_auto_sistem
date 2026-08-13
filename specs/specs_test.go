@@ -1,6 +1,9 @@
 package specs
 
-import "testing"
+import (
+	"strings"
+	"testing"
+)
 
 // Заголовки — реальные из датасета KP (data/research.csv).
 func TestExtractCPU(t *testing.T) {
@@ -79,6 +82,22 @@ func TestLookupExactModelSpecs(t *testing.T) {
 	}
 	if _, ok := LookupExactModelSpecs("Lenovo ThinkPad E14 Gen 6 Ryzen 7 16GB 512GB"); ok {
 		t.Fatal("family-only model must not match exact catalog")
+	}
+}
+
+func TestGeminiSpecsPromptForbidsCPUGuessing(t *testing.T) {
+	lower := strings.ToLower(GeminiSpecsPrompt)
+	if strings.Contains(lower, "обычно") {
+		t.Fatal("GeminiSpecsPrompt must not encourage typical-generation guessing")
+	}
+	for _, want := range []string{
+		"не являются доказательством точного cpu",
+		"не выводи cpu по ним",
+		"why_no_cpu",
+	} {
+		if !strings.Contains(lower, want) {
+			t.Fatalf("GeminiSpecsPrompt missing anti-guessing rule %q", want)
+		}
 	}
 }
 
