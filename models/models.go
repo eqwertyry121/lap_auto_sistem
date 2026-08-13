@@ -52,23 +52,28 @@ type Verdict struct {
 // ---------- Запись market_listings ----------
 
 type Listing struct {
-	AdID           int64
-	UserID         int64
-	Title          string
-	Price          float64
-	Currency       string
-	URL            string
-	Description    string
-	Seller         string
-	Status         Status
-	ProcessState   ProcessState
-	AttemptCount   int
-	NextAttemptAt  time.Time
-	LeaseUntil     time.Time
-	LastError      string
-	Verdict        Verdict
-	SyncedToSheets bool
-	CreatedAt      time.Time
+	AdID            int64
+	UserID          int64
+	Title           string
+	Price           float64
+	Currency        string
+	URL             string
+	Condition       string
+	Exchange        bool
+	KPIzlog         bool
+	IsRenewed       bool
+	DescriptionSnip string
+	Description     string
+	Seller          string
+	Status          Status
+	ProcessState    ProcessState
+	AttemptCount    int
+	NextAttemptAt   time.Time
+	LeaseUntil      time.Time
+	LastError       string
+	Verdict         Verdict
+	SyncedToSheets  bool
+	CreatedAt       time.Time
 }
 
 // ---------- KP Search API ----------

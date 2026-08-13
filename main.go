@@ -457,15 +457,20 @@ func discoverFreshListings(ctx context.Context, kp *collector.Client, store *sto
 		st.markLastSearchOK(time.Now())
 		for _, ad := range res.Ads {
 			l := models.Listing{
-				AdID:         ad.AdID,
-				UserID:       ad.UserID,
-				Title:        ad.Name,
-				Price:        float64(ad.Price),
-				Currency:     models.NormalizeCurrency(ad.Currency),
-				URL:          ad.URL(),
-				Status:       models.StatusNew,
-				ProcessState: models.ProcessDetailPending,
-				CreatedAt:    time.Now(),
+				AdID:            ad.AdID,
+				UserID:          ad.UserID,
+				Title:           ad.Name,
+				Price:           float64(ad.Price),
+				Currency:        models.NormalizeCurrency(ad.Currency),
+				URL:             ad.URL(),
+				Condition:       ad.Condition,
+				Exchange:        ad.Exchange,
+				KPIzlog:         ad.KPIzlog,
+				IsRenewed:       ad.IsRenewed,
+				DescriptionSnip: ad.DescriptionSnip,
+				Status:          models.StatusNew,
+				ProcessState:    models.ProcessDetailPending,
+				CreatedAt:       time.Now(),
 			}
 			if err := store.UpsertDiscovered(ctx, l); err != nil {
 				log.Error("durable queue: discover", "ad_id", ad.AdID, "err", err)
@@ -596,7 +601,8 @@ func processDueListings(ctx context.Context, kp *collector.Client, store *storag
 			}
 			ad := models.SearchAd{
 				AdID: l.AdID, Name: l.Title, Price: models.FlexFloat(price), Currency: cur,
-				AdURL: adURL, Condition: detail.Condition, KPIzlog: detail.KPIzlog,
+				AdURL: adURL, Condition: l.Condition, Exchange: l.Exchange,
+				KPIzlog: l.KPIzlog, IsRenewed: l.IsRenewed, DescriptionSnip: l.DescriptionSnip,
 				UserID: l.UserID,
 			}
 			_ = store.MarkProcessState(ctx, l.AdID, models.ProcessEvaluating)

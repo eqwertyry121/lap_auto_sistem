@@ -4,12 +4,15 @@ import (
 	"context"
 	"database/sql"
 	"encoding/base64"
+	"io"
+	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
 	"strings"
 	"testing"
 
+	"kpbot/config"
 	"kpbot/filters"
 	"kpbot/hw"
 	"kpbot/models"
@@ -17,6 +20,10 @@ import (
 	"kpbot/specs"
 	"kpbot/vision"
 )
+
+func slogDiscard() *slog.Logger {
+	return slog.New(slog.NewTextHandler(io.Discard, nil))
+}
 
 func TestDecideL0(t *testing.T) {
 	cases := []struct {
@@ -103,6 +110,23 @@ func TestDecideL5ConfigConflictForcesCheck(t *testing.T) {
 	}
 	if got := decideL5(in); got != vcCheck {
 		t.Fatalf("config conflict got %s, want CHECK", got)
+	}
+}
+
+func TestRunUsesSearchKPIzlogFallback(t *testing.T) {
+	cfg := &config.Config{
+		ResearchDBPath: filepath.Join(t.TempDir(), "research.db"),
+	}
+	out := Run(context.Background(), NewFunnel(), cfg, nil, slogDiscard(), models.SearchAd{
+		AdID: 1, Name: "Lenovo ThinkPad T480", Price: 300, Currency: "EUR", KPIzlog: true,
+	}, &models.AdDetail{
+		Description: "Clean laptop.",
+		Price:       300,
+		Currency:    "EUR",
+		Owner:       "Seller",
+	})
+	if out.Code != vcShop || out.Status != models.StatusNoDeal || out.AlertText != "" {
+		t.Fatalf("search KP Izlog fallback outcome = %+v, want silent SHOP", out)
 	}
 }
 

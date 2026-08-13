@@ -63,7 +63,7 @@ func TestOpenRecordsSchemaMigrationVersion(t *testing.T) {
 	).Scan(&name, &appliedAt); err != nil {
 		t.Fatalf("read schema migration: %v", err)
 	}
-	if name != "storage-main-v4" {
+	if name != "storage-main-v5" {
 		t.Fatalf("migration name = %q", name)
 	}
 	if appliedAt <= 0 {
@@ -119,6 +119,7 @@ func TestDiscoveredListingPreservesUserIDForSellerFilters(t *testing.T) {
 	st := openTestStore(t)
 	l := models.Listing{
 		AdID: 77, UserID: 12345, Title: "Laptop", Price: 200, Currency: "EUR", URL: "https://kp/77",
+		Condition: "used", Exchange: true, KPIzlog: true, IsRenewed: true, DescriptionSnip: "search snippet",
 		CreatedAt: time.Now(),
 	}
 	if err := st.UpsertDiscovered(ctx, l); err != nil {
@@ -128,6 +129,11 @@ func TestDiscoveredListingPreservesUserIDForSellerFilters(t *testing.T) {
 	withoutUser := l
 	withoutUser.UserID = 0
 	withoutUser.Price = 190
+	withoutUser.Condition = ""
+	withoutUser.Exchange = false
+	withoutUser.KPIzlog = false
+	withoutUser.IsRenewed = false
+	withoutUser.DescriptionSnip = ""
 	if err := st.UpsertDiscovered(ctx, withoutUser); err != nil {
 		t.Fatalf("upsert discovered without user id: %v", err)
 	}
@@ -144,6 +150,9 @@ func TestDiscoveredListingPreservesUserIDForSellerFilters(t *testing.T) {
 	}
 	if got[0].Price != 190 {
 		t.Fatalf("claimed Price = %.0f, want latest price 190", got[0].Price)
+	}
+	if got[0].Condition != "used" || !got[0].Exchange || !got[0].KPIzlog || !got[0].IsRenewed || got[0].DescriptionSnip != "search snippet" {
+		t.Fatalf("claimed search facts were not preserved: %+v", got[0])
 	}
 }
 

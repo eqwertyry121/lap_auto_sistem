@@ -24,7 +24,7 @@ type Store struct {
 	path string
 }
 
-const storageSchemaVersion = 4
+const storageSchemaVersion = 5
 
 const schema = `
 CREATE TABLE IF NOT EXISTS schema_migrations (
@@ -40,6 +40,11 @@ CREATE TABLE IF NOT EXISTS market_listings (
 	price             REAL NOT NULL DEFAULT 0,
 	currency          TEXT NOT NULL DEFAULT 'EUR',
 	url               TEXT NOT NULL DEFAULT '',
+	search_condition  TEXT NOT NULL DEFAULT '',
+	exchange          INTEGER NOT NULL DEFAULT 0,
+	kp_izlog          INTEGER NOT NULL DEFAULT 0,
+	is_renewed        INTEGER NOT NULL DEFAULT 0,
+	description_snip  TEXT NOT NULL DEFAULT '',
 	description       TEXT NOT NULL DEFAULT '',
 	seller            TEXT NOT NULL DEFAULT '',
 	status            TEXT NOT NULL DEFAULT 'NEW',
@@ -154,7 +159,7 @@ func applyStorageSchema(db *sql.DB) error {
 	}
 	if _, err := tx.Exec(
 		`INSERT OR IGNORE INTO schema_migrations (version, name, applied_at) VALUES (?, ?, ?)`,
-		storageSchemaVersion, "storage-main-v4", time.Now().Unix(),
+		storageSchemaVersion, "storage-main-v5", time.Now().Unix(),
 	); err != nil {
 		return fmt.Errorf("record schema migration: %w", err)
 	}
@@ -190,6 +195,11 @@ func migrateListingAudit(db schemaRunner) error {
 	}
 	for _, m := range []struct{ col, stmt string }{
 		{"user_id", `ALTER TABLE market_listings ADD COLUMN user_id INTEGER NOT NULL DEFAULT 0`},
+		{"search_condition", `ALTER TABLE market_listings ADD COLUMN search_condition TEXT NOT NULL DEFAULT ''`},
+		{"exchange", `ALTER TABLE market_listings ADD COLUMN exchange INTEGER NOT NULL DEFAULT 0`},
+		{"kp_izlog", `ALTER TABLE market_listings ADD COLUMN kp_izlog INTEGER NOT NULL DEFAULT 0`},
+		{"is_renewed", `ALTER TABLE market_listings ADD COLUMN is_renewed INTEGER NOT NULL DEFAULT 0`},
+		{"description_snip", `ALTER TABLE market_listings ADD COLUMN description_snip TEXT NOT NULL DEFAULT ''`},
 		{"verdict_code", `ALTER TABLE market_listings ADD COLUMN verdict_code TEXT NOT NULL DEFAULT ''`},
 		{"deviation", `ALTER TABLE market_listings ADD COLUMN deviation REAL NOT NULL DEFAULT 0`},
 		{"group_n", `ALTER TABLE market_listings ADD COLUMN group_n INTEGER NOT NULL DEFAULT 0`},
@@ -290,8 +300,13 @@ func (s *Store) InsertListing(ctx context.Context, l models.Listing) error {
 	defer tx.Rollback()
 
 	if _, err := tx.ExecContext(ctx,
-		`INSERT OR IGNORE INTO market_listings (ad_id, user_id, title, price, currency, url, status, created_at, process_state, next_attempt_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-		l.AdID, l.UserID, l.Title, l.Price, models.NormalizeCurrency(l.Currency), l.URL, string(l.Status), l.CreatedAt.Unix(), string(l.ProcessState), unixOrZero(l.NextAttemptAt)); err != nil {
+		`INSERT OR IGNORE INTO market_listings (
+			ad_id, user_id, title, price, currency, url, search_condition, exchange, kp_izlog, is_renewed, description_snip,
+			status, created_at, process_state, next_attempt_at
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		l.AdID, l.UserID, l.Title, l.Price, models.NormalizeCurrency(l.Currency), l.URL,
+		l.Condition, boolInt(l.Exchange), boolInt(l.KPIzlog), boolInt(l.IsRenewed), l.DescriptionSnip,
+		string(l.Status), l.CreatedAt.Unix(), string(l.ProcessState), unixOrZero(l.NextAttemptAt)); err != nil {
 		return err
 	}
 	if err := recordListingObservationTx(ctx, tx, l, "search", l.CreatedAt); err != nil {
@@ -319,9 +334,12 @@ func (s *Store) UpsertDiscovered(ctx context.Context, l models.Listing) error {
 	err = tx.QueryRowContext(ctx, `SELECT status, process_state FROM market_listings WHERE ad_id = ?`, l.AdID).Scan(&status, &state)
 	if err == sql.ErrNoRows {
 		_, err = tx.ExecContext(ctx, `
-INSERT INTO market_listings (ad_id, user_id, title, price, currency, url, status, created_at, process_state, next_attempt_at, lease_until)
-VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 0, 0)`,
+INSERT INTO market_listings (
+	ad_id, user_id, title, price, currency, url, search_condition, exchange, kp_izlog, is_renewed, description_snip,
+	status, created_at, process_state, next_attempt_at, lease_until
+) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, 0)`,
 			l.AdID, l.UserID, l.Title, l.Price, models.NormalizeCurrency(l.Currency), l.URL,
+			l.Condition, boolInt(l.Exchange), boolInt(l.KPIzlog), boolInt(l.IsRenewed), l.DescriptionSnip,
 			string(models.StatusNew), l.CreatedAt.Unix(), string(models.ProcessDetailPending))
 		if err != nil {
 			return err
@@ -339,9 +357,16 @@ VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 0, 0)`,
 		_, err = tx.ExecContext(ctx,
 			`UPDATE market_listings
 SET user_id = CASE WHEN ? != 0 THEN ? ELSE user_id END,
-    title = ?, price = ?, currency = ?, url = ?
+    title = ?, price = ?, currency = ?, url = ?,
+    search_condition = CASE WHEN ? != '' THEN ? ELSE search_condition END,
+    exchange = CASE WHEN ? != 0 THEN 1 ELSE exchange END,
+    kp_izlog = CASE WHEN ? != 0 THEN 1 ELSE kp_izlog END,
+    is_renewed = CASE WHEN ? != 0 THEN 1 ELSE is_renewed END,
+    description_snip = CASE WHEN ? != '' THEN ? ELSE description_snip END
 WHERE ad_id = ?`,
-			l.UserID, l.UserID, l.Title, l.Price, models.NormalizeCurrency(l.Currency), l.URL, l.AdID)
+			l.UserID, l.UserID, l.Title, l.Price, models.NormalizeCurrency(l.Currency), l.URL,
+			l.Condition, l.Condition, boolInt(l.Exchange), boolInt(l.KPIzlog), boolInt(l.IsRenewed),
+			l.DescriptionSnip, l.DescriptionSnip, l.AdID)
 	} else {
 		nextState := state
 		if nextState == "" || nextState == string(models.ProcessDiscovered) {
@@ -354,9 +379,17 @@ WHERE ad_id = ?`,
 		_, err = tx.ExecContext(ctx, `
 UPDATE market_listings
 SET user_id = CASE WHEN ? != 0 THEN ? ELSE user_id END,
-    title = ?, price = ?, currency = ?, url = ?, status = ?, process_state = ?
+    title = ?, price = ?, currency = ?, url = ?,
+    search_condition = CASE WHEN ? != '' THEN ? ELSE search_condition END,
+    exchange = CASE WHEN ? != 0 THEN 1 ELSE exchange END,
+    kp_izlog = CASE WHEN ? != 0 THEN 1 ELSE kp_izlog END,
+    is_renewed = CASE WHEN ? != 0 THEN 1 ELSE is_renewed END,
+    description_snip = CASE WHEN ? != '' THEN ? ELSE description_snip END,
+    status = ?, process_state = ?
 WHERE ad_id = ?`,
-			l.UserID, l.UserID, l.Title, l.Price, models.NormalizeCurrency(l.Currency), l.URL, nextStatus, nextState, l.AdID)
+			l.UserID, l.UserID, l.Title, l.Price, models.NormalizeCurrency(l.Currency), l.URL,
+			l.Condition, l.Condition, boolInt(l.Exchange), boolInt(l.KPIzlog), boolInt(l.IsRenewed),
+			l.DescriptionSnip, l.DescriptionSnip, nextStatus, nextState, l.AdID)
 	}
 	if err != nil {
 		return err
@@ -536,7 +569,8 @@ func (s *Store) ClaimDueListings(ctx context.Context, states []models.ProcessSta
 	defer tx.Rollback()
 
 	rows, err := tx.QueryContext(ctx, `
-SELECT ad_id, user_id, title, price, currency, url, description, seller, status, process_state,
+SELECT ad_id, user_id, title, price, currency, url, search_condition, exchange, kp_izlog, is_renewed, description_snip,
+       description, seller, status, process_state,
        attempt_count, next_attempt_at, lease_until, last_error, created_at
 FROM market_listings
 WHERE process_state IN (`+strings.Join(ph, ",")+`)
@@ -552,12 +586,17 @@ LIMIT ?`, args...)
 		var l models.Listing
 		var status, state string
 		var nextAt, leaseAt, createdAt int64
+		var exchange, kpIzlog, isRenewed int
 		if err := rows.Scan(&l.AdID, &l.UserID, &l.Title, &l.Price, &l.Currency, &l.URL,
+			&l.Condition, &exchange, &kpIzlog, &isRenewed, &l.DescriptionSnip,
 			&l.Description, &l.Seller, &status, &state, &l.AttemptCount,
 			&nextAt, &leaseAt, &l.LastError, &createdAt); err != nil {
 			rows.Close()
 			return nil, err
 		}
+		l.Exchange = exchange != 0
+		l.KPIzlog = kpIzlog != 0
+		l.IsRenewed = isRenewed != 0
 		l.Status = models.Status(status)
 		l.ProcessState = models.ProcessState(state)
 		l.NextAttemptAt = timeFromUnix(nextAt)
@@ -1038,6 +1077,13 @@ func unixOrZero(t time.Time) int64 {
 		return 0
 	}
 	return t.Unix()
+}
+
+func boolInt(v bool) int {
+	if v {
+		return 1
+	}
+	return 0
 }
 
 func timeFromUnix(v int64) time.Time {

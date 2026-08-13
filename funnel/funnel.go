@@ -331,6 +331,8 @@ func Run(ctx context.Context, f *Funnel, cfg *config.Config, gem *vision.GeminiC
 
 	market, cpus, gpus, rate := f.snapshot()
 	priceEUR := pricing.ToEUR(float64(ad.Price), models.NormalizeCurrency(ad.Currency), rate)
+	condition := listingCondition(detail.Condition, ad.Condition)
+	kpIzlog := detail.KPIzlog || ad.KPIzlog
 	bump := func(layer string) { _ = storage.BumpFunnelStat(ctx, cfg.ResearchDBPath, layer) }
 
 	tr := &traceBuf{enabled: cfg.FunnelTrace}
@@ -339,7 +341,7 @@ func Run(ctx context.Context, f *Funnel, cfg *config.Config, gem *vision.GeminiC
 	tr.f("цена: %s → %.0f€ · продавец: %s (user_id=%d)",
 		models.FormatPrice(float64(ad.Price), ad.Currency), priceEUR, detail.Seller(), ad.UserID)
 	tr.f("метки KP (используются в L1 как М1/М2): trgovac=%v kp_izlog=%v condition=%q",
-		detail.IsTrader(), detail.KPIzlog, detail.Condition)
+		detail.IsTrader(), kpIzlog, condition)
 
 	// ---- Бан-лист (PLAN_v5, Фаза A): запрещённые линейки (MacBook) ----
 	if banned, hit := decideBan(ad.Name+" "+ad.DescriptionSnip, cfg.BannedModels); banned {
@@ -375,7 +377,7 @@ func Run(ctx context.Context, f *Funnel, cfg *config.Config, gem *vision.GeminiC
 	facts := filters.AdFacts{
 		Title: ad.Name, Description: descPlain, Seller: detail.Seller(),
 		SellerLabel: seller.Label, AdLabel: adLabel,
-		Condition: detail.Condition, IsTrader: detail.IsTrader(), KPIzlog: detail.KPIzlog,
+		Condition: condition, IsTrader: detail.IsTrader(), KPIzlog: kpIzlog,
 		IsRenewed: ad.IsRenewed,
 		SellerAds: seller.AdsCount, SellerRecentAds: seller.RecentAdsCount,
 		SellerAgeDays: seller.AgeDays(),
@@ -724,7 +726,6 @@ func Run(ctx context.Context, f *Funnel, cfg *config.Config, gem *vision.GeminiC
 	}
 
 	// ---- L4: цена/качество ----
-	condition := listingCondition(detail.Condition, ad.Condition)
 	if market == nil {
 		tr.f("L4: рыночная модель ещё не загружена → итог NO_MARKET (тихо)")
 		flush()
