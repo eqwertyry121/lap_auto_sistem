@@ -483,7 +483,7 @@ func pollOnce(ctx context.Context, kp *collector.Client, store *storage.Store, c
 				Price:        float64(ad.Price),
 				Currency:     models.NormalizeCurrency(ad.Currency),
 				URL:          ad.URL(),
-				Status:       models.Status(models.ProcessDetailPending),
+				Status:       models.StatusNew,
 				ProcessState: models.ProcessDetailPending,
 				CreatedAt:    time.Now(),
 			}

@@ -63,7 +63,7 @@ func TestOpenRecordsSchemaMigrationVersion(t *testing.T) {
 	).Scan(&name, &appliedAt); err != nil {
 		t.Fatalf("read schema migration: %v", err)
 	}
-	if name != "storage-main-v2" {
+	if name != "storage-main-v3" {
 		t.Fatalf("migration name = %q", name)
 	}
 	if appliedAt <= 0 {
@@ -104,6 +104,85 @@ func TestDiscoveredListingCanBeClaimedAfterExistingRow(t *testing.T) {
 	}
 	if byState[string(models.ProcessDetailPending)] != 1 {
 		t.Fatalf("process states = %+v, want one DETAIL_PENDING", byState)
+	}
+	var status, process string
+	if err := st.db.QueryRowContext(ctx, `SELECT status, process_state FROM market_listings WHERE ad_id = 1`).Scan(&status, &process); err != nil {
+		t.Fatalf("read listing state: %v", err)
+	}
+	if status != string(models.StatusNew) || process != string(models.ProcessDetailPending) {
+		t.Fatalf("status=%s process=%s, want NEW/DETAIL_PENDING", status, process)
+	}
+}
+
+func TestProcessStateDoesNotOverwriteBusinessStatus(t *testing.T) {
+	ctx := context.Background()
+	st := openTestStore(t)
+	l := models.Listing{
+		AdID: 12, Title: "Laptop", Price: 300, Currency: "EUR", URL: "https://kp/12",
+		CreatedAt: time.Now(),
+	}
+	if err := st.UpsertDiscovered(ctx, l); err != nil {
+		t.Fatalf("upsert discovered: %v", err)
+	}
+	if err := st.MarkProcessState(ctx, 12, models.ProcessEvaluating); err != nil {
+		t.Fatalf("mark evaluating: %v", err)
+	}
+	var status, process string
+	if err := st.db.QueryRowContext(ctx, `SELECT status, process_state FROM market_listings WHERE ad_id = 12`).Scan(&status, &process); err != nil {
+		t.Fatalf("read evaluating: %v", err)
+	}
+	if status != string(models.StatusNew) || process != string(models.ProcessEvaluating) {
+		t.Fatalf("status=%s process=%s, want NEW/EVALUATING", status, process)
+	}
+	if err := st.RetryProcess(ctx, 12, models.ProcessEvaluating, "temporary error"); err != nil {
+		t.Fatalf("retry evaluating: %v", err)
+	}
+	if err := st.db.QueryRowContext(ctx, `SELECT status, process_state FROM market_listings WHERE ad_id = 12`).Scan(&status, &process); err != nil {
+		t.Fatalf("read retry: %v", err)
+	}
+	if status != string(models.StatusNew) || process != string(models.ProcessEvaluating) {
+		t.Fatalf("status=%s process=%s after retry, want NEW/EVALUATING", status, process)
+	}
+}
+
+func TestStorageMigrationNormalizesActiveProcessStatuses(t *testing.T) {
+	ctx := context.Background()
+	st := openTestStore(t)
+	if _, err := st.db.ExecContext(ctx, `
+INSERT INTO market_listings (ad_id, title, status, process_state, created_at)
+VALUES (13, 'old active row', 'EVALUATING', 'EVALUATING', ?)`, time.Now().Unix()); err != nil {
+		t.Fatalf("insert legacy row: %v", err)
+	}
+	if _, err := st.db.ExecContext(ctx, `
+INSERT INTO market_listings (ad_id, title, status, process_state, created_at)
+VALUES (14, 'old retry row', 'ERROR', 'DETAIL_PENDING', ?)`, time.Now().Unix()); err != nil {
+		t.Fatalf("insert legacy retry row: %v", err)
+	}
+	if _, err := st.db.ExecContext(ctx, `
+INSERT INTO market_listings (ad_id, title, status, process_state, created_at)
+VALUES (15, 'dead row', 'ERROR', 'DEAD', ?)`, time.Now().Unix()); err != nil {
+		t.Fatalf("insert dead row: %v", err)
+	}
+	if err := applyStorageSchema(st.db); err != nil {
+		t.Fatalf("reapply schema: %v", err)
+	}
+	cases := []struct {
+		adID        int64
+		wantStatus  string
+		wantProcess string
+	}{
+		{13, string(models.StatusNew), string(models.ProcessEvaluating)},
+		{14, string(models.StatusNew), string(models.ProcessDetailPending)},
+		{15, string(models.StatusError), string(models.ProcessDead)},
+	}
+	for _, c := range cases {
+		var status, process string
+		if err := st.db.QueryRowContext(ctx, `SELECT status, process_state FROM market_listings WHERE ad_id = ?`, c.adID).Scan(&status, &process); err != nil {
+			t.Fatalf("read migrated row %d: %v", c.adID, err)
+		}
+		if status != c.wantStatus || process != c.wantProcess {
+			t.Fatalf("ad %d status=%s process=%s, want %s/%s", c.adID, status, process, c.wantStatus, c.wantProcess)
+		}
 	}
 }
 
@@ -233,8 +312,8 @@ func TestFunnelAlertPendingBecomesAlertedOnlyAfterOutboxSent(t *testing.T) {
 	if err := st.db.QueryRowContext(ctx, `SELECT status, process_state FROM market_listings WHERE ad_id = 2`).Scan(&status, &process); err != nil {
 		t.Fatalf("read listing: %v", err)
 	}
-	if status == string(models.StatusAlerted) || process != string(models.ProcessAlertPending) {
-		t.Fatalf("status=%s process=%s, want not-alerted pending", status, process)
+	if status != string(models.StatusNew) || process != string(models.ProcessAlertPending) {
+		t.Fatalf("status=%s process=%s, want NEW/ALERT_PENDING before delivery", status, process)
 	}
 	items, err := st.ClaimTelegramOutbox(ctx, 10, time.Minute)
 	if err != nil {

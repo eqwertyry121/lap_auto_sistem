@@ -24,7 +24,7 @@ type Store struct {
 	path string
 }
 
-const storageSchemaVersion = 2
+const storageSchemaVersion = 3
 
 const schema = `
 CREATE TABLE IF NOT EXISTS schema_migrations (
@@ -153,7 +153,7 @@ func applyStorageSchema(db *sql.DB) error {
 	}
 	if _, err := tx.Exec(
 		`INSERT OR IGNORE INTO schema_migrations (version, name, applied_at) VALUES (?, ?, ?)`,
-		storageSchemaVersion, "storage-main-v2", time.Now().Unix(),
+		storageSchemaVersion, "storage-main-v3", time.Now().Unix(),
 	); err != nil {
 		return fmt.Errorf("record schema migration: %w", err)
 	}
@@ -215,6 +215,10 @@ WHERE process_state = '' AND status = 'ALERT_PENDING';
 UPDATE market_listings
 SET process_state = 'DONE'
 WHERE process_state = '' AND status IN ('SCANNED','SKIPPED_SPAM','SKIPPED_BAN','ALERTED','NEED_CHECK','NO_DEAL');
+UPDATE market_listings
+SET status = 'NEW'
+WHERE status IN ('DISCOVERED','DETAIL_PENDING','ENRICH_PENDING','EVALUATING','ALERT_PENDING')
+   OR (status = 'ERROR' AND process_state IN ('DISCOVERED','DETAIL_PENDING','ENRICH_PENDING','EVALUATING','ALERT_PENDING'));
 `); err != nil {
 		return err
 	}
@@ -316,7 +320,7 @@ func (s *Store) UpsertDiscovered(ctx context.Context, l models.Listing) error {
 INSERT INTO market_listings (ad_id, title, price, currency, url, status, created_at, process_state, next_attempt_at, lease_until)
 VALUES (?, ?, ?, ?, ?, ?, ?, ?, 0, 0)`,
 			l.AdID, l.Title, l.Price, models.NormalizeCurrency(l.Currency), l.URL,
-			string(models.ProcessDetailPending), l.CreatedAt.Unix(), string(models.ProcessDetailPending))
+			string(models.StatusNew), l.CreatedAt.Unix(), string(models.ProcessDetailPending))
 		if err != nil {
 			return err
 		}
@@ -339,8 +343,8 @@ VALUES (?, ?, ?, ?, ?, ?, ?, ?, 0, 0)`,
 			nextState = string(models.ProcessDetailPending)
 		}
 		nextStatus := status
-		if nextStatus == "" || nextStatus == string(models.StatusNew) || nextStatus == string(models.StatusError) {
-			nextStatus = nextState
+		if nextStatus == "" || nextStatus == string(models.StatusError) || activeProcessStatus(nextStatus) {
+			nextStatus = string(models.StatusNew)
 		}
 		_, err = tx.ExecContext(ctx, `
 UPDATE market_listings
@@ -368,6 +372,16 @@ func listingClosed(status, state string) bool {
 		return true
 	}
 	return false
+}
+
+func activeProcessStatus(status string) bool {
+	switch status {
+	case string(models.ProcessDiscovered), string(models.ProcessDetailPending), string(models.ProcessEnrichPending),
+		string(models.ProcessEvaluating), string(models.ProcessAlertPending):
+		return true
+	default:
+		return false
+	}
 }
 
 type ListingLifecycle struct {
@@ -566,8 +580,8 @@ LIMIT ?`, args...)
 
 func (s *Store) MarkProcessState(ctx context.Context, adID int64, state models.ProcessState) error {
 	_, err := s.db.ExecContext(ctx,
-		`UPDATE market_listings SET status = ?, process_state = ?, lease_until = 0 WHERE ad_id = ?`,
-		string(state), string(state), adID)
+		`UPDATE market_listings SET process_state = ?, lease_until = 0 WHERE ad_id = ?`,
+		string(state), adID)
 	return err
 }
 
@@ -585,7 +599,7 @@ func (s *Store) RetryProcess(ctx context.Context, adID int64, state models.Proce
 UPDATE market_listings
 SET status = ?, process_state = ?, attempt_count = ?, next_attempt_at = ?, lease_until = 0, last_error = ?
 WHERE ad_id = ?`,
-		string(state), string(state), attempts, next, truncateErr(reason), adID)
+		string(models.StatusNew), string(state), attempts, next, truncateErr(reason), adID)
 	return err
 }
 
@@ -668,7 +682,7 @@ func (s *Store) SaveFunnelAlertPending(ctx context.Context, adID int64, v Funnel
 	if _, err := tx.ExecContext(ctx,
 		`UPDATE market_listings SET verdict_code = ?, deviation = ?, group_n = ?, alternatives = ?, reason = ?, specs = ?, status = ?, process_state = ?, lease_until = 0 WHERE ad_id = ?`,
 		v.Code, v.Deviation, v.GroupN, v.Alternatives, v.Reason, v.Specs,
-		string(models.ProcessAlertPending), string(models.ProcessAlertPending), adID); err != nil {
+		string(models.StatusNew), string(models.ProcessAlertPending), adID); err != nil {
 		return err
 	}
 	if err := enqueueOutboxTx(ctx, tx, adID, "funnel", text, url, finalStatus); err != nil {
