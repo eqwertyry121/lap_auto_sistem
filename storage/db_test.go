@@ -145,6 +145,78 @@ func TestProcessStateDoesNotOverwriteBusinessStatus(t *testing.T) {
 	}
 }
 
+func TestRetryProcessKeepsTransientFailuresRetryable(t *testing.T) {
+	ctx := context.Background()
+	st := openTestStore(t)
+	l := models.Listing{
+		AdID: 16, Title: "Laptop", Price: 300, Currency: "EUR", URL: "https://kp/16",
+		CreatedAt: time.Now(),
+	}
+	if err := st.UpsertDiscovered(ctx, l); err != nil {
+		t.Fatalf("upsert discovered: %v", err)
+	}
+
+	for i := 0; i < 8; i++ {
+		if err := st.RetryProcess(ctx, 16, models.ProcessDetailPending, "kp temporarily unavailable"); err != nil {
+			t.Fatalf("retry %d: %v", i+1, err)
+		}
+	}
+
+	var status, process, lastErr string
+	var attempts int
+	var nextAttemptAt, leaseUntil int64
+	if err := st.db.QueryRowContext(ctx, `
+SELECT status, process_state, attempt_count, next_attempt_at, lease_until, last_error
+FROM market_listings
+WHERE ad_id = 16`).Scan(&status, &process, &attempts, &nextAttemptAt, &leaseUntil, &lastErr); err != nil {
+		t.Fatalf("read listing state: %v", err)
+	}
+	if status != string(models.StatusNew) || process != string(models.ProcessDetailPending) {
+		t.Fatalf("status=%s process=%s, want NEW/DETAIL_PENDING", status, process)
+	}
+	if attempts != 8 {
+		t.Fatalf("attempt_count = %d, want 8", attempts)
+	}
+	if nextAttemptAt <= time.Now().Unix() {
+		t.Fatalf("next_attempt_at = %d, want future retry", nextAttemptAt)
+	}
+	if leaseUntil != 0 {
+		t.Fatalf("lease_until = %d, want released lease", leaseUntil)
+	}
+	if lastErr != "kp temporarily unavailable" {
+		t.Fatalf("last_error = %q", lastErr)
+	}
+}
+
+func TestMarkDeadIsExplicitPermanentFailure(t *testing.T) {
+	ctx := context.Background()
+	st := openTestStore(t)
+	l := models.Listing{
+		AdID: 17, Title: "Removed Laptop", Price: 300, Currency: "EUR", URL: "https://kp/17",
+		CreatedAt: time.Now(),
+	}
+	if err := st.UpsertDiscovered(ctx, l); err != nil {
+		t.Fatalf("upsert discovered: %v", err)
+	}
+	if err := st.MarkDead(ctx, 17, "listing not found"); err != nil {
+		t.Fatalf("mark dead: %v", err)
+	}
+
+	var status, process, lastErr string
+	if err := st.db.QueryRowContext(ctx, `
+SELECT status, process_state, last_error
+FROM market_listings
+WHERE ad_id = 17`).Scan(&status, &process, &lastErr); err != nil {
+		t.Fatalf("read listing state: %v", err)
+	}
+	if status != string(models.StatusError) || process != string(models.ProcessDead) {
+		t.Fatalf("status=%s process=%s, want ERROR/DEAD", status, process)
+	}
+	if lastErr != "listing not found" {
+		t.Fatalf("last_error = %q", lastErr)
+	}
+}
+
 func TestStorageMigrationNormalizesActiveProcessStatuses(t *testing.T) {
 	ctx := context.Background()
 	st := openTestStore(t)

@@ -591,9 +591,6 @@ func (s *Store) RetryProcess(ctx context.Context, adID int64, state models.Proce
 		return err
 	}
 	attempts++
-	if attempts >= 6 {
-		return s.MarkDead(ctx, adID, reason)
-	}
 	next := time.Now().Add(retryDelay(attempts)).Unix()
 	_, err := s.db.ExecContext(ctx, `
 UPDATE market_listings
