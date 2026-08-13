@@ -1100,6 +1100,7 @@ func ensureResearchSpecsLaptopModelColumn(ctx context.Context, db *sql.DB) error
 	defer rows.Close()
 
 	seenTable := false
+	cols := map[string]bool{}
 	for rows.Next() {
 		seenTable = true
 		var (
@@ -1113,9 +1114,7 @@ func ensureResearchSpecsLaptopModelColumn(ctx context.Context, db *sql.DB) error
 		if err := rows.Scan(&cid, &name, &typ, &notNull, &def, &pk); err != nil {
 			return err
 		}
-		if strings.EqualFold(name, "laptop_model") {
-			return nil
-		}
+		cols[strings.ToLower(name)] = true
 	}
 	if err := rows.Err(); err != nil {
 		rows.Close()
@@ -1127,11 +1126,22 @@ func ensureResearchSpecsLaptopModelColumn(ctx context.Context, db *sql.DB) error
 	if !seenTable {
 		return fmt.Errorf("research_specs table is missing")
 	}
-	if _, err := db.ExecContext(ctx, `ALTER TABLE research_specs ADD COLUMN laptop_model TEXT NOT NULL DEFAULT ''`); err != nil {
-		if strings.Contains(strings.ToLower(err.Error()), "duplicate column") {
-			return nil
+	for _, migration := range []struct {
+		col  string
+		stmt string
+	}{
+		{"laptop_model", `ALTER TABLE research_specs ADD COLUMN laptop_model TEXT NOT NULL DEFAULT ''`},
+		{"source", `ALTER TABLE research_specs ADD COLUMN source TEXT NOT NULL DEFAULT ''`},
+	} {
+		if cols[migration.col] {
+			continue
 		}
-		return err
+		if _, err := db.ExecContext(ctx, migration.stmt); err != nil {
+			if strings.Contains(strings.ToLower(err.Error()), "duplicate column") {
+				continue
+			}
+			return err
+		}
 	}
 	return nil
 }

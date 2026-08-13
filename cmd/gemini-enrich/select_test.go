@@ -126,6 +126,47 @@ SELECT laptop_model, cpu_model, ram_gb, ssd_gb, gpu_model, source FROM research_
 	}
 }
 
+func TestWriteBackUpgradesOldResearchSpecsSchema(t *testing.T) {
+	db, err := sql.Open("sqlite", filepath.Join(t.TempDir(), "test.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	if _, err := db.Exec(`
+CREATE TABLE research_specs (
+	ad_id INTEGER PRIMARY KEY,
+	cpu_model TEXT NOT NULL DEFAULT '',
+	cpu_score REAL NOT NULL DEFAULT 0,
+	ram_gb INTEGER NOT NULL DEFAULT 0,
+	ssd_gb INTEGER NOT NULL DEFAULT 0,
+	gpu_model TEXT NOT NULL DEFAULT '',
+	gpu_score REAL NOT NULL DEFAULT 0,
+	updated_at INTEGER NOT NULL DEFAULT 0
+);`); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := writeBackSource(context.Background(), db, 12, geminiSpecs{
+		LaptopModel: "Lenovo ThinkPad E14 Gen 6 21M3003PCX",
+		CPU:         "Ryzen 7 7735HS",
+	}, "model-catalog", nil, nil); err != nil {
+		t.Fatal(err)
+	}
+	if !testResearchSpecsColumnExists(t, db, "laptop_model") {
+		t.Fatal("research_specs.laptop_model was not added")
+	}
+	if !testResearchSpecsColumnExists(t, db, "source") {
+		t.Fatal("research_specs.source was not added")
+	}
+	var laptopModel, source string
+	if err := db.QueryRow(`SELECT laptop_model, source FROM research_specs WHERE ad_id=12`).Scan(&laptopModel, &source); err != nil {
+		t.Fatal(err)
+	}
+	if laptopModel != "Lenovo ThinkPad E14 Gen 6 21M3003PCX" || source != "model-catalog" {
+		t.Fatalf("upgraded row laptop_model=%q source=%q", laptopModel, source)
+	}
+}
+
 func TestWriteBackMatchesRyzenProAlias(t *testing.T) {
 	db, err := sql.Open("sqlite", filepath.Join(t.TempDir(), "test.db"))
 	if err != nil {
@@ -264,4 +305,33 @@ CREATE TABLE research_specs (
 	if cpu != "AMD Ryzen 7 7735HS" || score != 18729 || source != "model-catalog" {
 		t.Fatalf("writeBackSource cpu=%q score=%.0f source=%q", cpu, score, source)
 	}
+}
+
+func testResearchSpecsColumnExists(t *testing.T, db *sql.DB, column string) bool {
+	t.Helper()
+	rows, err := db.Query(`PRAGMA table_info(research_specs)`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var (
+			cid     int
+			name    string
+			typ     string
+			notNull int
+			def     sql.NullString
+			pk      int
+		)
+		if err := rows.Scan(&cid, &name, &typ, &notNull, &def, &pk); err != nil {
+			t.Fatal(err)
+		}
+		if name == column {
+			return true
+		}
+	}
+	if err := rows.Err(); err != nil {
+		t.Fatal(err)
+	}
+	return false
 }

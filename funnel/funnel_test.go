@@ -450,6 +450,9 @@ func TestCachedGeminiSpecsMergePartialStages(t *testing.T) {
 	if !researchSpecsColumnExists(t, dbPath, "laptop_model") {
 		t.Fatal("saveCachedGeminiSpecs must upgrade old research_specs schema with laptop_model")
 	}
+	if !researchSpecsColumnExists(t, dbPath, "source") {
+		t.Fatal("saveCachedGeminiSpecs must upgrade old research_specs schema with source")
+	}
 	if err := saveCachedGeminiSpecs(ctx, dbPath, 101, "gemini-photo-all", specs.GeminiSpecs{
 		GPU: "NVIDIA Quadro T1000",
 	}, nil, nil); err != nil {
@@ -517,8 +520,7 @@ CREATE TABLE research_specs (
 	ssd_gb INTEGER NOT NULL DEFAULT 0,
 	gpu_model TEXT NOT NULL DEFAULT '',
 	gpu_score REAL NOT NULL DEFAULT 0,
-	updated_at INTEGER NOT NULL DEFAULT 0,
-	source TEXT NOT NULL DEFAULT ''
+	updated_at INTEGER NOT NULL DEFAULT 0
 );`); err != nil {
 		t.Fatal(err)
 	}
