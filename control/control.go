@@ -5,6 +5,7 @@
 package control
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -145,11 +146,15 @@ func (p *Panel) fetchUpdates(ctx context.Context, client *http.Client, offset in
 		return nil, offset, fmt.Errorf("HTTP %d: %s", resp.StatusCode, truncateCtl(string(raw), 160))
 	}
 	var envelope struct {
-		OK     bool       `json:"ok"`
-		Result []tgUpdate `json:"result"`
+		OK          bool       `json:"ok"`
+		Description string     `json:"description"`
+		Result      []tgUpdate `json:"result"`
 	}
 	if err := json.Unmarshal(raw, &envelope); err != nil {
 		return nil, offset, err
+	}
+	if !envelope.OK {
+		return nil, offset, fmt.Errorf("getUpdates: %s", nonEmptyCtl(envelope.Description, "telegram returned ok=false"))
 	}
 	next := offset
 	for _, u := range envelope.Result {
@@ -160,14 +165,21 @@ func (p *Panel) fetchUpdates(ctx context.Context, client *http.Client, offset in
 	return envelope.Result, next, nil
 }
 
-func (p *Panel) answerCallback(cbID string) {
+func (p *Panel) answerCallback(ctx context.Context, cbID string) error {
 	u := fmt.Sprintf("https://api.telegram.org/bot%s/answerCallbackQuery?callback_query_id=%s",
 		p.token, url.QueryEscape(cbID))
 	c := &http.Client{Timeout: 5 * time.Second}
-	resp, err := c.Get(u)
-	if err == nil {
-		resp.Body.Close()
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, u, nil)
+	if err != nil {
+		return err
 	}
+	resp, err := c.Do(req)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	raw, _ := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
+	return telegramCtlResponseError("answerCallbackQuery", resp.StatusCode, raw)
 }
 
 // ---------- диспетчер ----------
@@ -176,7 +188,9 @@ func (p *Panel) handle(ctx context.Context, u *tgUpdate, log *slog.Logger) {
 	switch {
 	case u.CallbackQuery != nil:
 		cb := u.CallbackQuery
-		p.answerCallback(cb.ID)
+		if err := p.answerCallback(ctx, cb.ID); err != nil {
+			log.Warn("control panel: answerCallbackQuery", "err", err)
+		}
 		if cb.Message.Chat.ID != p.chatID {
 			return
 		}
@@ -340,7 +354,7 @@ func (p *Panel) sendWithKeyboard(ctx context.Context, text string, keyboard map[
 		return
 	}
 	u := fmt.Sprintf("https://api.telegram.org/bot%s/sendMessage", p.token)
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, u, strings.NewReader(string(body)))
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, u, bytes.NewReader(body))
 	if err != nil {
 		return
 	}
@@ -351,10 +365,29 @@ func (p *Panel) sendWithKeyboard(ctx context.Context, text string, keyboard map[
 		slog.Error("пульт: панель", "err", err)
 		return
 	}
-	resp.Body.Close()
+	defer resp.Body.Close()
+	raw, _ := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
+	if err := telegramCtlResponseError("sendMessage", resp.StatusCode, raw); err != nil {
+		slog.Error("control panel: sendMessage", "err", err)
+	}
 }
 
 // ---------- утилиты ----------
+
+func telegramCtlResponseError(method string, status int, raw []byte) error {
+	var tr struct {
+		OK          bool   `json:"ok"`
+		Description string `json:"description"`
+	}
+	if err := json.Unmarshal(raw, &tr); err != nil {
+		return fmt.Errorf("%s: HTTP %d: %s", method, status, truncateCtl(string(raw), 160))
+	}
+	if status != http.StatusOK || !tr.OK {
+		desc := nonEmptyCtl(tr.Description, "telegram returned ok=false")
+		return fmt.Errorf("%s: HTTP %d: %s", method, status, desc)
+	}
+	return nil
+}
 
 func splitChunks(text string, limit int) []string {
 	if len(text) <= limit {

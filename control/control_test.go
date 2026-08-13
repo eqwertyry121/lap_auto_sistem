@@ -2,6 +2,7 @@ package control
 
 import (
 	"context"
+	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -57,5 +58,21 @@ func TestChallengeRatePerHour(t *testing.T) {
 	}
 	if got := challengeRatePerHour(0, time.Hour); got != 0 {
 		t.Fatalf("zero challenges challengeRatePerHour = %.2f, want 0", got)
+	}
+}
+
+func TestTelegramCtlResponseError(t *testing.T) {
+	if err := telegramCtlResponseError("sendMessage", 200, []byte(`{"ok":true}`)); err != nil {
+		t.Fatalf("ok response returned error: %v", err)
+	}
+
+	err := telegramCtlResponseError("sendMessage", 200, []byte(`{"ok":false,"description":"chat not found"}`))
+	if err == nil || !strings.Contains(err.Error(), "chat not found") {
+		t.Fatalf("ok=false error = %v, want description", err)
+	}
+
+	err = telegramCtlResponseError("sendMessage", 502, []byte(`bad gateway`))
+	if err == nil || !strings.Contains(err.Error(), "HTTP 502") {
+		t.Fatalf("bad body error = %v, want HTTP status", err)
 	}
 }

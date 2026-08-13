@@ -28,8 +28,19 @@ func TestHeartbeatWritesAndUpdatesState(t *testing.T) {
 	h := New(path, "starting")
 
 	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-	go h.Run(ctx, 10*time.Millisecond)
+	done := make(chan struct{})
+	go func() {
+		h.Run(ctx, 10*time.Millisecond)
+		close(done)
+	}()
+	t.Cleanup(func() {
+		cancel()
+		select {
+		case <-done:
+		case <-time.After(time.Second):
+			t.Fatal("Run did not stop after context cancellation")
+		}
+	})
 
 	waitForFile(t, path, 2*time.Second)
 	data, err := os.ReadFile(path)
