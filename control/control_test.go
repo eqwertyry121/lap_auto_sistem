@@ -47,3 +47,15 @@ func TestPanelStatusToleratesMissingMarketProvider(t *testing.T) {
 
 	p.status(context.Background())
 }
+
+func TestChallengeRatePerHour(t *testing.T) {
+	if got := challengeRatePerHour(6, 2*time.Hour); got != 3 {
+		t.Fatalf("challengeRatePerHour = %.2f, want 3.00", got)
+	}
+	if got := challengeRatePerHour(1, 0); got != 0 {
+		t.Fatalf("zero uptime challengeRatePerHour = %.2f, want 0", got)
+	}
+	if got := challengeRatePerHour(0, time.Hour); got != 0 {
+		t.Fatalf("zero challenges challengeRatePerHour = %.2f, want 0", got)
+	}
+}

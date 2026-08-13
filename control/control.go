@@ -255,6 +255,7 @@ func (p *Panel) status(ctx context.Context) {
 	fmt.Fprintf(&b, "🩺 СТАТУС\n\nРежим: %s\nАптайм: %s\n", mode, time.Since(p.started).Round(time.Minute))
 	if p.chCount != nil {
 		fmt.Fprintf(&b, "Челленджей KP с запуска: %d\n", p.chCount.Load())
+		fmt.Fprintf(&b, "kp_challenge_rate: %.2f/hour\n", challengeRatePerHour(p.chCount.Load(), time.Since(p.started)))
 	}
 	if p.health != nil {
 		now := time.Now()
@@ -413,6 +414,13 @@ func geminiCostStatus(costUSD, budgetUSD float64) string {
 		return fmt.Sprintf("%s/%s", formatUSDControl(costUSD), formatUSDControl(budgetUSD))
 	}
 	return formatUSDControl(costUSD)
+}
+
+func challengeRatePerHour(challenges int64, uptime time.Duration) float64 {
+	if challenges <= 0 || uptime <= 0 {
+		return 0
+	}
+	return float64(challenges) / uptime.Hours()
 }
 
 func formatUSDControl(v float64) string {

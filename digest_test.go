@@ -93,6 +93,7 @@ func TestDigestText(t *testing.T) {
 		"Лоты за 24ч:</b> 15",
 		"ALERTED: 2",
 		"Челленджи KP (с запуска):</b> 4",
+		"kp_challenge_rate:</b> 0.16/hour",
 		"858/24677",
 		"3.5%",
 		"DETAIL_PENDING: 2",
@@ -117,5 +118,17 @@ func TestDigestText(t *testing.T) {
 	// Длинный заголовок обрезается.
 	if !strings.Contains(text, strings.Repeat("x", 59)+"…") {
 		t.Errorf("заголовок алерта не обрезан до 60 символов:\n%s", text)
+	}
+}
+
+func TestChallengeRatePerHour(t *testing.T) {
+	if got := challengeRatePerHour(3, 90*time.Minute); got != 2 {
+		t.Fatalf("challengeRatePerHour = %.2f, want 2.00", got)
+	}
+	if got := challengeRatePerHour(3, 0); got != 0 {
+		t.Fatalf("zero uptime challengeRatePerHour = %.2f, want 0", got)
+	}
+	if got := challengeRatePerHour(0, time.Hour); got != 0 {
+		t.Fatalf("zero challenges challengeRatePerHour = %.2f, want 0", got)
 	}
 }

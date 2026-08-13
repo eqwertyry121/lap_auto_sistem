@@ -72,6 +72,8 @@ func digestText(uptime time.Duration, byStatus map[string]int, challenges int64,
 
 	fmt.Fprintf(&b, "<b>Челленджи KP (с запуска):</b> %d\n", challenges)
 
+	fmt.Fprintf(&b, "<b>kp_challenge_rate:</b> %.2f/hour\n", challengeRatePerHour(challenges, uptime))
+
 	if total > 0 {
 		fmt.Fprintf(&b, "<b>Покрытие рынка:</b> %d/%d деталей (%.1f%%)\n",
 			detailed, total, 100*float64(detailed)/float64(total))
@@ -127,6 +129,13 @@ func hasQueueBacklog(processStates map[string]int) bool {
 		}
 	}
 	return false
+}
+
+func challengeRatePerHour(challenges int64, uptime time.Duration) float64 {
+	if challenges <= 0 || uptime <= 0 {
+		return 0
+	}
+	return float64(challenges) / uptime.Hours()
 }
 
 func healthAge(now, t time.Time) string {
