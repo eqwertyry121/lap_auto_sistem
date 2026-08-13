@@ -216,7 +216,7 @@ func main() {
 	}
 	go st.beat.Run(ctx, time.Minute)
 
-	gemini := vision.NewGeminiClient(cfg.GeminiAPIKey, cfg.GeminiModel).
+	gemini := vision.NewGeminiClient(cfg.GeminiAPIKey, cfg.GeminiTextModel).
 		SetLimits(cfg.GeminiConcurrency, cfg.GeminiDailyLimit).
 		SetDailyBudgetUSD(cfg.GeminiDailyBudgetUSD)
 	st.syncGeminiStats(gemini.Stats())

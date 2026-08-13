@@ -638,6 +638,12 @@ func geminiPriceForModel(model string) (geminiPrice, bool) {
 		return geminiPrice{inputUSDPerMTok: 0.50, outputUSDPerMTok: 3.00}, true
 	case strings.Contains(m, "gemini-3.1-pro"):
 		return geminiPrice{inputUSDPerMTok: 2.00, outputUSDPerMTok: 12.00}, true
+	case strings.Contains(m, "flash-lite"):
+		return geminiPrice{inputUSDPerMTok: 0.10, outputUSDPerMTok: 0.40}, true
+	case strings.Contains(m, "flash"):
+		return geminiPrice{inputUSDPerMTok: 0.30, outputUSDPerMTok: 2.50}, true
+	case strings.Contains(m, "pro"):
+		return geminiPrice{inputUSDPerMTok: 1.25, outputUSDPerMTok: 10.00}, true
 	}
 	return geminiPrice{}, false
 }

@@ -72,7 +72,9 @@ func main() {
 	fnl := funnel.NewFunnel()
 	fnl.RefreshMarket(ctx, cfg, log)
 
-	gem := vision.NewGeminiClient(cfg.GeminiAPIKey, cfg.GeminiModel)
+	gem := vision.NewGeminiClient(cfg.GeminiAPIKey, cfg.GeminiTextModel).
+		SetLimits(cfg.GeminiConcurrency, cfg.GeminiDailyLimit).
+		SetDailyBudgetUSD(cfg.GeminiDailyBudgetUSD)
 	cfg.FunnelTrace = true // трассировка всегда — ради этого и запускаем
 
 	fmt.Println("\n────────── ПРОГОН ВОРОНКИ ──────────")

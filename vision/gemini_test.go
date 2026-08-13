@@ -102,6 +102,28 @@ func TestGeminiRecordsTokenUsageAndCost(t *testing.T) {
 	}
 }
 
+func TestGeminiPriceAliasesAreEstimated(t *testing.T) {
+	cases := []struct {
+		model string
+		want  geminiPrice
+	}{
+		{"gemini-flash-lite-latest", geminiPrice{inputUSDPerMTok: 0.10, outputUSDPerMTok: 0.40}},
+		{"models/gemini-flash-latest", geminiPrice{inputUSDPerMTok: 0.30, outputUSDPerMTok: 2.50}},
+		{"gemini-pro-latest", geminiPrice{inputUSDPerMTok: 1.25, outputUSDPerMTok: 10.00}},
+	}
+	for _, c := range cases {
+		t.Run(c.model, func(t *testing.T) {
+			got, ok := geminiPriceForModel(c.model)
+			if !ok {
+				t.Fatalf("geminiPriceForModel(%q) not recognized", c.model)
+			}
+			if got != c.want {
+				t.Fatalf("geminiPriceForModel(%q) = %+v, want %+v", c.model, got, c.want)
+			}
+		})
+	}
+}
+
 func TestGeminiDailyBudgetBlocksAfterSpend(t *testing.T) {
 	var calls atomic.Int32
 	g := NewGeminiClient("key", "gemini-2.5-flash-lite").
