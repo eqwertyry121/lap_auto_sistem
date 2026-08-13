@@ -1,6 +1,7 @@
 package main
 
 import (
+	"strings"
 	"testing"
 	"time"
 
@@ -36,6 +37,61 @@ func TestJitteredZero(t *testing.T) {
 	base := 1234 * time.Millisecond
 	if got := jittered(base, 0); got != base {
 		t.Errorf("jitter=0 должен вернуть базу: got %v", got)
+	}
+}
+
+func TestValidateResearchRuntimeConfig(t *testing.T) {
+	valid := researchRuntimeConfig{
+		PageDelayMS:            2500,
+		DetailDelayMS:          6000,
+		JitterPct:              40,
+		ChallengePauseMin:      30,
+		KPCooldownPath:         "data/kp_cooldown",
+		KPRateCooldownSec:      90,
+		KPChallengeCooldownMin: 30,
+	}
+	if err := validateResearchRuntimeConfig(valid); err != nil {
+		t.Fatalf("valid config rejected: %v", err)
+	}
+
+	cases := []struct {
+		name string
+		mut  func(*researchRuntimeConfig)
+		want string
+	}{
+		{"negative max pages", func(c *researchRuntimeConfig) { c.MaxPages = -1 }, "max-pages"},
+		{"zero page delay", func(c *researchRuntimeConfig) { c.PageDelayMS = 0 }, "page-delay-ms"},
+		{"zero detail delay", func(c *researchRuntimeConfig) { c.DetailDelayMS = 0 }, "detail-delay-ms"},
+		{"bad jitter", func(c *researchRuntimeConfig) { c.JitterPct = 101 }, "jitter-pct"},
+		{"zero challenge pause", func(c *researchRuntimeConfig) { c.ChallengePauseMin = 0 }, "challenge-pause-min"},
+		{"empty cooldown path", func(c *researchRuntimeConfig) { c.KPCooldownPath = "" }, "kp-cooldown"},
+		{"zero rate cooldown", func(c *researchRuntimeConfig) { c.KPRateCooldownSec = 0 }, "kp-rate-cooldown-sec"},
+		{"zero challenge cooldown", func(c *researchRuntimeConfig) { c.KPChallengeCooldownMin = 0 }, "kp-challenge-cooldown-min"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			cfg := valid
+			tc.mut(&cfg)
+			err := validateResearchRuntimeConfig(cfg)
+			if err == nil || !strings.Contains(err.Error(), tc.want) {
+				t.Fatalf("error = %v, want mention %q", err, tc.want)
+			}
+		})
+	}
+}
+
+func TestEnvPositiveInt(t *testing.T) {
+	t.Setenv("RESEARCH_TEST_INT", "42")
+	var errs []string
+	if got := envPositiveInt("RESEARCH_TEST_INT", 7, &errs); got != 42 || len(errs) != 0 {
+		t.Fatalf("envPositiveInt valid = %d errors=%v, want 42/no errors", got, errs)
+	}
+	t.Setenv("RESEARCH_TEST_INT", "0")
+	if got := envPositiveInt("RESEARCH_TEST_INT", 7, &errs); got != 7 {
+		t.Fatalf("envPositiveInt invalid fallback = %d, want 7", got)
+	}
+	if len(errs) != 1 || !strings.Contains(errs[0], "RESEARCH_TEST_INT") {
+		t.Fatalf("errors = %v, want one env error", errs)
 	}
 }
 

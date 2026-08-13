@@ -46,6 +46,11 @@ import (
 )
 
 func main() {
+	_ = godotenv.Load()
+	var defaultErrors []string
+	kpCooldownPathDefault := envString("KP_COOLDOWN_PATH", filepath.Join("data", "kp_cooldown"))
+	kpRateCooldownSecDefault := envPositiveInt("KP_RATE_COOLDOWN_SEC", 90, &defaultErrors)
+	kpChallengeCooldownMinDefault := envPositiveInt("KP_CHALLENGE_COOLDOWN_MIN", 30, &defaultErrors)
 	var (
 		dbPath            = flag.String("db", "data/research.db", "SQLite-файл датасета")
 		csvPath           = flag.String("csv", "data/research.csv", "куда выгрузить CSV (пусто — не выгружать)")
@@ -61,12 +66,31 @@ func main() {
 		searchRefresh     = flag.Bool("search-refresh", false, "бэкфилл search-полей (user_id и др.) уже собранных строк без запросов /eds/")
 		heartbeatPath     = flag.String("heartbeat", "data/research.heartbeat", "heartbeat-файл живости для watchdog")
 		lockPath          = flag.String("lock", "data/research.lock", "singleton lock file")
+		kpCooldownPath    = flag.String("kp-cooldown", kpCooldownPathDefault, "shared KP cooldown file")
+		kpRateCooldownSec = flag.Int("kp-rate-cooldown-sec", kpRateCooldownSecDefault, "shared cooldown after KP 429, seconds")
+		kpChallengeMin    = flag.Int("kp-challenge-cooldown-min", kpChallengeCooldownMinDefault, "shared cooldown after KP challenge, minutes")
 	)
 	flag.Parse()
 
-	_ = godotenv.Load()
 	slog.SetDefault(slog.New(slog.NewTextHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelInfo})))
 	log := slog.Default()
+	if len(defaultErrors) > 0 {
+		log.Error("invalid environment", "err", strings.Join(defaultErrors, "; "))
+		os.Exit(2)
+	}
+	if err := validateResearchRuntimeConfig(researchRuntimeConfig{
+		MaxPages:               *maxPages,
+		PageDelayMS:            *pageDelayMS,
+		DetailDelayMS:          *detailDelayMS,
+		JitterPct:              *jitterPct,
+		ChallengePauseMin:      *challengePauseMin,
+		KPCooldownPath:         *kpCooldownPath,
+		KPRateCooldownSec:      *kpRateCooldownSec,
+		KPChallengeCooldownMin: *kpChallengeMin,
+	}); err != nil {
+		log.Error("invalid config", "err", err)
+		os.Exit(2)
+	}
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
@@ -118,10 +142,15 @@ func main() {
 		return
 	}
 
-	client := collector.NewClient()
+	client := collector.NewClient(collector.WithSharedCooldown(
+		*kpCooldownPath,
+		time.Duration(*kpRateCooldownSec)*time.Second,
+		time.Duration(*kpChallengeMin)*time.Minute,
+	))
 	log.Info("исследовательский сбор рынка ноутбуков KP",
 		"db", *dbPath, "max_pages", *maxPages, "search_only", *searchOnly,
-		"page_delay_ms", *pageDelayMS, "detail_delay_ms", *detailDelayMS, "jitter_pct", *jitterPct)
+		"page_delay_ms", *pageDelayMS, "detail_delay_ms", *detailDelayMS, "jitter_pct", *jitterPct,
+		"kp_cooldown_path", *kpCooldownPath, "kp_rate_cooldown_sec", *kpRateCooldownSec, "kp_challenge_cooldown_min", *kpChallengeMin)
 
 	started := time.Now()
 	challengePause := time.Duration(*challengePauseMin) * time.Minute
@@ -320,6 +349,67 @@ func main() {
 		}
 		log.Info("CSV выгружен", "path", *csvPath, "rows", n)
 	}
+}
+
+type researchRuntimeConfig struct {
+	MaxPages               int
+	PageDelayMS            int
+	DetailDelayMS          int
+	JitterPct              int
+	ChallengePauseMin      int
+	KPCooldownPath         string
+	KPRateCooldownSec      int
+	KPChallengeCooldownMin int
+}
+
+func validateResearchRuntimeConfig(c researchRuntimeConfig) error {
+	if c.MaxPages < 0 {
+		return fmt.Errorf("max-pages must be >= 0")
+	}
+	if c.PageDelayMS <= 0 {
+		return fmt.Errorf("page-delay-ms must be positive")
+	}
+	if c.DetailDelayMS <= 0 {
+		return fmt.Errorf("detail-delay-ms must be positive")
+	}
+	if c.JitterPct < 0 || c.JitterPct > 100 {
+		return fmt.Errorf("jitter-pct must be in 0..100")
+	}
+	if c.ChallengePauseMin <= 0 {
+		return fmt.Errorf("challenge-pause-min must be positive")
+	}
+	if strings.TrimSpace(c.KPCooldownPath) == "" {
+		return fmt.Errorf("kp-cooldown must be non-empty")
+	}
+	if c.KPRateCooldownSec <= 0 {
+		return fmt.Errorf("kp-rate-cooldown-sec must be positive")
+	}
+	if c.KPChallengeCooldownMin <= 0 {
+		return fmt.Errorf("kp-challenge-cooldown-min must be positive")
+	}
+	return nil
+}
+
+func envString(key, fallback string) string {
+	if v := strings.TrimSpace(os.Getenv(key)); v != "" {
+		return v
+	}
+	return fallback
+}
+
+func envPositiveInt(key string, fallback int, errs *[]string) int {
+	v := strings.TrimSpace(os.Getenv(key))
+	if v == "" {
+		return fallback
+	}
+	n, err := strconv.Atoi(v)
+	if err != nil || n <= 0 {
+		if errs != nil {
+			*errs = append(*errs, fmt.Sprintf("%s must be a positive integer", key))
+		}
+		return fallback
+	}
+	return n
 }
 
 // searchLevelRow — строка по данным поисковой страницы (без деталей).
