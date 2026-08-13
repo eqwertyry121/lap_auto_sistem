@@ -58,7 +58,7 @@ func main() {
 
 	// ---------- L1: продавцы ----------
 	if len(sellerLabels) >= 5 {
-		var tp, fp, fn, tn int
+		var tp, fp, fn, tn, unknownPrivate int
 		type errCase struct {
 			userID  int64
 			want    string
@@ -80,15 +80,24 @@ func main() {
 			case want == "PRIVATE" && got == "SHOP":
 				fp++
 				errs = append(errs, errCase{userID, want, got, reasons})
+			case want == "PRIVATE" && got == filters.ClassUnknown:
+				unknownPrivate++
+				errs = append(errs, errCase{userID, want, got, reasons})
 			default:
 				tn++
 			}
 		}
-		recall, precision, fpr := safeRatio(tp, tp+fn), safeRatio(tp, tp+fp), safeRatio(fp, fp+tn)
+		shopTotal := tp + fn
+		privateTotal := fp + tn + unknownPrivate
+		total := shopTotal + privateTotal
+		recall, precision, fpr := safeRatio(tp, shopTotal), safeRatio(tp, tp+fp), safeRatio(fp, privateTotal)
+		privateConfirmed := safeRatio(tn, privateTotal)
 		fmt.Printf("=== L1: фильтр магазинов ===\n")
 		fmt.Printf("Размечено продавцов: %d (SHOP %d, PRIVATE %d)\n",
-			tp+fp+fn+tn, tp+fn, fp+tn)
+			total, shopTotal, privateTotal)
 		fmt.Printf("TP=%d FP=%d FN=%d TN=%d\n", tp, fp, fn, tn)
+		fmt.Printf("UNKNOWN на PRIVATE = %d\n", unknownPrivate)
+		fmt.Printf("confirmed PRIVATE = %.2f\n", privateConfirmed)
 		fmt.Printf("recall(SHOP)    = %.2f  (порог ≥ 0.95)\n", recall)
 		fmt.Printf("precision(SHOP) = %.2f  (порог ≥ 0.90)\n", precision)
 		fmt.Printf("false-pos на PRIVATE = %.2f  (порог ≤ 0.05)\n", fpr)
@@ -237,6 +246,9 @@ FROM research_ads WHERE user_id = ?`, userID)
 	}
 	if best.Class == filters.ClassShop {
 		return filters.ClassShop, joinReasons(best.Reasons)
+	}
+	if best.Class == filters.ClassUnknown {
+		return filters.ClassUnknown, joinReasons(best.Reasons)
 	}
 	return filters.ClassPrivate, joinReasons(best.Reasons)
 }
