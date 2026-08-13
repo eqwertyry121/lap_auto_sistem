@@ -410,7 +410,7 @@ func Run(ctx context.Context, f *Funnel, cfg *config.Config, gem *vision.GeminiC
 		tr.f("L2: CLEAN")
 	}
 
-	// ---- L3: конфигурация (regex → Gemini-текст → Gemini-фото) ----
+	// ---- L3: конфигурация (regex/catalog/cache → Gemini-фото со всеми снимками → Gemini-текст fallback → web search) ----
 	tr.f("L3.1 regex: разбираю текст (заголовок + описание, %d симв.)", len(ad.Name)+len(descPlain))
 	recognized := specs.Extract(ad.Name + " " + descPlain)
 	cpuModel, cpuScore := matchCPU(cpus, recognized.CPU)
@@ -592,44 +592,49 @@ func Run(ctx context.Context, f *Funnel, cfg *config.Config, gem *vision.GeminiC
 		}
 	}
 
-	if missing() && !cachedText {
-		tr.f("L3.2 Gemini-текст (%s): regex не дал CPU или GPU — спрашиваю Gemini", cfg.GeminiTextModel)
-		gs, prompt, raw, err := geminiTextSpecs(ctx, gem.WithModel(cfg.GeminiTextModel), ad.Name, descPlain, detail.Attributes)
-		bump("L3_GEMINI_TEXT")
-		bump("L3_2_GEMINI_TEXT")
-		tr.f("L3.2 запрос Gemini (промпт): %s", traceTrunc(prompt, 700))
-		if err != nil {
-			tr.f("L3.2 ошибка Gemini: %v", err)
-			log.Warn("воронка: gemini-text", "ad_id", ad.AdID, "err", err)
-		} else {
-			tr.f("L3.2 ответ Gemini (как пришёл): %s", traceTrunc(raw, 400))
-			merge("L3.2", "gemini-text", gs)
-			if err := saveCachedGeminiSpecs(ctx, cfg.ResearchDBPath, ad.AdID, "gemini-text", gs, cpus, gpus); err != nil {
-				log.Warn("воронка: cache gemini-text specs", "ad_id", ad.AdID, "err", err)
+	for _, stage := range geminiSpecStageOrder(missing(), len(detail.Photos), cachedPhoto, cachedText) {
+		if !missing() {
+			break
+		}
+		switch stage {
+		case geminiStagePhoto:
+			tr.f("L3.3 Gemini-фото (%s): текста не хватило — отправляю все %d фото", cfg.GeminiVisionModel, len(detail.Photos))
+			for i, ph := range detail.Photos {
+				tr.f("L3.3 фото %d/%d: %s", i+1, len(detail.Photos), ph.BestURL())
+			}
+			gs, note, raw, err := geminiPhotoSpecs(ctx, gem.WithModel(cfg.GeminiVisionModel), ad.Name, descPlain, laptopModel, detail.Attributes, detail.Photos)
+			bump("L3_GEMINI_PHOTO")
+			bump("L3_3_GEMINI_PHOTO")
+			tr.f("L3.3 запрос Gemini (текстовая часть): %s", traceTrunc(note, 300))
+			if err != nil {
+				tr.f("L3.3 ошибка Gemini: %v", err)
+				log.Warn("воронка: gemini-photo-all", "ad_id", ad.AdID, "err", err)
+			} else {
+				tr.f("L3.3 ответ Gemini (как пришёл): %s", traceTrunc(raw, 400))
+				merge("L3.3", "gemini-photo-all", gs)
+				if err := saveCachedGeminiSpecs(ctx, cfg.ResearchDBPath, ad.AdID, "gemini-photo-all", gs, cpus, gpus); err != nil {
+					log.Warn("воронка: cache gemini-photo-all specs", "ad_id", ad.AdID, "err", err)
+				}
+			}
+		case geminiStageText:
+			tr.f("L3.2 Gemini-текст (%s): фото не закрыли CPU/GPU или фото нет — спрашиваю Gemini по тексту", cfg.GeminiTextModel)
+			gs, prompt, raw, err := geminiTextSpecs(ctx, gem.WithModel(cfg.GeminiTextModel), ad.Name, descPlain, detail.Attributes)
+			bump("L3_GEMINI_TEXT")
+			bump("L3_2_GEMINI_TEXT")
+			tr.f("L3.2 запрос Gemini (промпт): %s", traceTrunc(prompt, 700))
+			if err != nil {
+				tr.f("L3.2 ошибка Gemini: %v", err)
+				log.Warn("воронка: gemini-text", "ad_id", ad.AdID, "err", err)
+			} else {
+				tr.f("L3.2 ответ Gemini (как пришёл): %s", traceTrunc(raw, 400))
+				merge("L3.2", "gemini-text", gs)
+				if err := saveCachedGeminiSpecs(ctx, cfg.ResearchDBPath, ad.AdID, "gemini-text", gs, cpus, gpus); err != nil {
+					log.Warn("воронка: cache gemini-text specs", "ad_id", ad.AdID, "err", err)
+				}
 			}
 		}
 	}
-	researchModelSpecs()
-	if missing() && len(detail.Photos) > 0 && !cachedPhoto {
-		tr.f("L3.3 Gemini-фото (%s): текста не хватило — отправляю все %d фото", cfg.GeminiVisionModel, len(detail.Photos))
-		for i, ph := range detail.Photos {
-			tr.f("L3.3 фото %d/%d: %s", i+1, len(detail.Photos), ph.BestURL())
-		}
-		gs, note, raw, err := geminiPhotoSpecs(ctx, gem.WithModel(cfg.GeminiVisionModel), ad.Name, descPlain, laptopModel, detail.Photos)
-		bump("L3_GEMINI_PHOTO")
-		bump("L3_3_GEMINI_PHOTO")
-		tr.f("L3.3 запрос Gemini (текстовая часть): %s", traceTrunc(note, 300))
-		if err != nil {
-			tr.f("L3.3 ошибка Gemini: %v", err)
-			log.Warn("воронка: gemini-photo-all", "ad_id", ad.AdID, "err", err)
-		} else {
-			tr.f("L3.3 ответ Gemini (как пришёл): %s", traceTrunc(raw, 400))
-			merge("L3.3", "gemini-photo-all", gs)
-			if err := saveCachedGeminiSpecs(ctx, cfg.ResearchDBPath, ad.AdID, "gemini-photo-all", gs, cpus, gpus); err != nil {
-				log.Warn("воронка: cache gemini-photo-all specs", "ad_id", ad.AdID, "err", err)
-			}
-		}
-	} else if missing() && len(detail.Photos) == 0 {
+	if missing() && len(detail.Photos) == 0 {
 		tr.f("L3.3: фото у лота нет — ступень Gemini-фото пропущена")
 	}
 	researchModelSpecs()
@@ -1047,6 +1052,27 @@ func buildSpecsLine(laptop, cpu string, ram, ssd int, gpu string, integratedGPU 
 // Каждая ступень возвращает (спеки, отправленный запрос, сырой ответ, ошибка) —
 // всё это попадает в трассировку, чтобы любой вызов можно было проследить.
 
+type geminiSpecStage string
+
+const (
+	geminiStagePhoto geminiSpecStage = "photo"
+	geminiStageText  geminiSpecStage = "text"
+)
+
+func geminiSpecStageOrder(needsSpecs bool, photoCount int, cachedPhoto, cachedText bool) []geminiSpecStage {
+	if !needsSpecs {
+		return nil
+	}
+	out := make([]geminiSpecStage, 0, 2)
+	if photoCount > 0 && !cachedPhoto {
+		out = append(out, geminiStagePhoto)
+	}
+	if !cachedText {
+		out = append(out, geminiStageText)
+	}
+	return out
+}
+
 func loadCachedGeminiSpecs(ctx context.Context, dbPath string, adID int64) (specs.GeminiSpecs, string, bool) {
 	db, err := sql.Open("sqlite", dbPath)
 	if err != nil {
@@ -1250,8 +1276,8 @@ func geminiTextSpecs(ctx context.Context, gem *vision.GeminiClient, title, descP
 	return gs, prompt, out, perr
 }
 
-func geminiPhotoSpecs(ctx context.Context, gem *vision.GeminiClient, title, descPlain, laptopModel string, photos []models.PhotoDoc) (specs.GeminiSpecs, string, string, error) {
-	note := geminiPhotoPrompt(title, descPlain, laptopModel)
+func geminiPhotoSpecs(ctx context.Context, gem *vision.GeminiClient, title, descPlain, laptopModel string, attrs []models.Attribute, photos []models.PhotoDoc) (specs.GeminiSpecs, string, string, error) {
+	note := geminiPhotoPrompt(title, descPlain, laptopModel, attrs)
 	parts := []vision.Part{{Text: note}}
 	photoParts, failures := downloadGeminiPhotoParts(ctx, gem, photos)
 	if len(failures) > 0 {
@@ -1312,9 +1338,18 @@ func downloadGeminiPhotoParts(ctx context.Context, gem *vision.GeminiClient, pho
 	return out, failures
 }
 
-func geminiPhotoPrompt(title, descPlain, laptopModel string) string {
+func geminiPhotoPrompt(title, descPlain, laptopModel string, attrs []models.Attribute) string {
 	var b strings.Builder
 	fmt.Fprintf(&b, "Title: %s\nDescription: %s\n", title, truncateRunes(descPlain, 800))
+	if len(attrs) > 0 {
+		b.WriteString("Listing attributes:\n")
+		for _, a := range attrs {
+			if a.Name == "" && a.Value == "" {
+				continue
+			}
+			fmt.Fprintf(&b, "- %s: %s\n", a.Name, a.Value)
+		}
+	}
 	if model := strings.TrimSpace(laptopModel); model != "" {
 		fmt.Fprintf(&b, "\nLaptop model hint from title/description: %s\n", model)
 		b.WriteString("Use the model only as a hint. Verify exact CPU/GPU/RAM/SSD on the attached photos/screenshots and do not guess variants.\n")

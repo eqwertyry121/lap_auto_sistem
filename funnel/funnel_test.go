@@ -327,6 +327,7 @@ func TestGeminiPhotoPromptKeepsKnownModelHint(t *testing.T) {
 		"Lenovo ThinkPad E14 Gen 6 - Ryzen 7 / 16GB / 512GB",
 		"Prodajem laptop, specifikacije su na poslednjoj slici.",
 		"Lenovo ThinkPad E14 Gen 6",
+		[]models.Attribute{{Name: "Procesor", Value: "Ryzen 7"}},
 	)
 	if !strings.Contains(prompt, "Laptop model hint from title/description: Lenovo ThinkPad E14 Gen 6") {
 		t.Fatalf("prompt does not include known model hint:\n%s", prompt)
@@ -336,6 +337,24 @@ func TestGeminiPhotoPromptKeepsKnownModelHint(t *testing.T) {
 	}
 	if !strings.Contains(prompt, "Photos are attached in the original listing order") {
 		t.Fatalf("prompt must remind Gemini to inspect all photos in order:\n%s", prompt)
+	}
+	if !strings.Contains(prompt, "Procesor: Ryzen 7") {
+		t.Fatalf("prompt must include listing attributes before photos:\n%s", prompt)
+	}
+}
+
+func TestGeminiSpecStageOrderPrefersAllPhotos(t *testing.T) {
+	got := geminiSpecStageOrder(true, 7, false, false)
+	if len(got) != 2 || got[0] != geminiStagePhoto || got[1] != geminiStageText {
+		t.Fatalf("stage order = %+v, want photo before text", got)
+	}
+	got = geminiSpecStageOrder(true, 7, true, false)
+	if len(got) != 1 || got[0] != geminiStageText {
+		t.Fatalf("cached photo stage order = %+v, want text fallback only", got)
+	}
+	got = geminiSpecStageOrder(false, 7, false, false)
+	if len(got) != 0 {
+		t.Fatalf("complete deterministic specs should not call Gemini, got %+v", got)
 	}
 }
 
