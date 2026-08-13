@@ -215,9 +215,11 @@ FROM research_ads WHERE user_id = ?`, userID)
 	}
 
 	ads, _ := countSellerAds(ctx, db, userID)
+	recentAds, _ := countSellerRecentAds(ctx, db, userID)
 	age := sellerAgeDays(ctx, db, userID)
 	for i := range facts {
 		facts[i].SellerAds = ads
+		facts[i].SellerRecentAds = recentAds
 		facts[i].SellerAgeDays = age
 	}
 
@@ -255,6 +257,15 @@ func countSellerAds(ctx context.Context, db *sql.DB, userID int64) (int, error) 
 	var n int
 	err := db.QueryRowContext(ctx,
 		`SELECT COUNT(*) FROM research_ads WHERE user_id = ?`, userID).Scan(&n)
+	return n, err
+}
+
+func countSellerRecentAds(ctx context.Context, db *sql.DB, userID int64) (int, error) {
+	var n int
+	recentSince := time.Now().Add(-30 * 24 * time.Hour).Unix()
+	err := db.QueryRowContext(ctx,
+		`SELECT COUNT(*) FROM research_ads WHERE user_id = ? AND fetched_at >= ?`,
+		userID, recentSince).Scan(&n)
 	return n, err
 }
 

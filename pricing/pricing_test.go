@@ -8,6 +8,8 @@ import (
 	"path/filepath"
 	"testing"
 	"time"
+
+	"kpbot/filters"
 )
 
 // ---------- валюта ----------
@@ -289,6 +291,102 @@ VALUES (?, 'i5-1135G7', 10000, 16, 512)`, adID); err != nil {
 	}
 	if got := len(m.Pool()); got != 0 {
 		t.Fatalf("fresh bulk seller lots must be excluded from market pool, got %d", got)
+	}
+}
+
+func TestLoadMarketExcludesStaleBulkSellerAsUnknown(t *testing.T) {
+	dbPath := filepath.Join(t.TempDir(), "research.db")
+	db, err := sql.Open("sqlite", dbPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	schema := `
+CREATE TABLE research_ads (
+	ad_id INTEGER PRIMARY KEY,
+	title TEXT NOT NULL DEFAULT '',
+	url TEXT NOT NULL DEFAULT '',
+	price REAL NOT NULL DEFAULT 0,
+	currency TEXT NOT NULL DEFAULT 'EUR',
+	posted TEXT NOT NULL DEFAULT '',
+	kind TEXT NOT NULL DEFAULT 'UNKNOWN',
+	description TEXT NOT NULL DEFAULT '',
+	seller TEXT NOT NULL DEFAULT '',
+	is_trader INTEGER NOT NULL DEFAULT 0,
+	kp_izlog INTEGER NOT NULL DEFAULT 0,
+	is_renewed INTEGER NOT NULL DEFAULT 0,
+	user_id INTEGER NOT NULL DEFAULT 0,
+	fetched_at INTEGER NOT NULL DEFAULT 0,
+	fetch_status TEXT NOT NULL DEFAULT ''
+);
+CREATE TABLE research_specs (
+	ad_id INTEGER PRIMARY KEY,
+	cpu_model TEXT NOT NULL DEFAULT '',
+	cpu_score REAL NOT NULL DEFAULT 0,
+	ram_gb INTEGER NOT NULL DEFAULT 0,
+	ssd_gb INTEGER NOT NULL DEFAULT 0,
+	gpu_model TEXT NOT NULL DEFAULT '',
+	gpu_score REAL NOT NULL DEFAULT 0
+);
+CREATE TABLE sellers (
+	user_id INTEGER PRIMARY KEY,
+	trader_seen INTEGER NOT NULL DEFAULT 0,
+	kpizlog_seen INTEGER NOT NULL DEFAULT 0,
+	reviews INTEGER NOT NULL DEFAULT 0,
+	user_created TEXT NOT NULL DEFAULT ''
+);`
+	if _, err := db.Exec(schema); err != nil {
+		t.Fatal(err)
+	}
+	now := time.Now()
+	old := now.Add(-75 * 24 * time.Hour)
+	insertAd := func(adID int64, posted time.Time) {
+		t.Helper()
+		if _, err := db.Exec(`
+INSERT INTO research_ads (
+	ad_id, title, url, price, currency, posted, kind, description, seller,
+	is_trader, kp_izlog, is_renewed, user_id, fetched_at, fetch_status
+) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+			adID, fmt.Sprintf("Historical seller laptop %d", adID), fmt.Sprintf("https://kp.test/%d", adID),
+			300+float64(adID), "EUR", posted.Format("2006-01-02 15:04:05"), "USED", "Prodajem svoj laptop.", "Marko",
+			0, 0, 0, 888, posted.Unix(), "OK"); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := db.Exec(`
+INSERT INTO research_specs (ad_id, cpu_model, cpu_score, ram_gb, ssd_gb)
+VALUES (?, 'i5-1135G7', 10000, 16, 512)`, adID); err != nil {
+			t.Fatal(err)
+		}
+	}
+	insertAd(1, now)
+	for i := int64(2); i <= 12; i++ {
+		insertAd(i, old)
+	}
+	if err := db.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	m, err := LoadMarket(context.Background(), dbPath, Options{
+		MedianWindowDays:  60,
+		HedonicWindowDays: 90,
+		RSDEurRate:        117.2,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var fresh Lot
+	for _, lot := range m.Lots() {
+		if lot.AdID == 1 {
+			fresh = lot
+			break
+		}
+	}
+	if fresh.SellerClass != filters.ClassUnknown || fresh.IsShop {
+		t.Fatalf("fresh stale-bulk lot seller class = %q shop=%v, want UNKNOWN/non-shop", fresh.SellerClass, fresh.IsShop)
+	}
+	for _, lot := range m.Pool() {
+		if lot.AdID == 1 {
+			t.Fatalf("UNKNOWN seller must be excluded from market pool: %+v", lot)
+		}
 	}
 }
 

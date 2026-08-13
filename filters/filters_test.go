@@ -76,8 +76,11 @@ func TestL1_BehavioralSignals(t *testing.T) {
 	if v := L1(AdFacts{Title: "Laptop i5", Description: "Prodajem svoj laptop.", SellerAds: 5}); v.Class == ClassShop {
 		t.Errorf("5 лотов без других признаков не должны резать: %v", v.Reasons)
 	}
-	if v := L1(AdFacts{Title: "Laptop i5", Description: "Prodajem svoj laptop.", SellerAds: 12}); v.Class != ClassShop {
-		t.Errorf("12 лотов должны резать как перекуп/магазин: %s (%v)", v.Class, v.Reasons)
+	if v := L1(AdFacts{Title: "Laptop i5", Description: "Prodajem svoj laptop.", SellerAds: 12}); v.Class != ClassUnknown {
+		t.Errorf("12 исторических лотов без свежей активности должны быть UNKNOWN, got %s (%v)", v.Class, v.Reasons)
+	}
+	if v := L1(AdFacts{Title: "Laptop i5", Description: "Prodajem svoj laptop.", SellerAds: 12, SellerRecentAds: 4}); v.Class != ClassShop {
+		t.Errorf("история + 4 свежих лота должны резать активного перекупа: %s (%v)", v.Class, v.Reasons)
 	}
 	if v := L1(AdFacts{Title: "Laptop i5", Description: "Prodajem svoj laptop.", SellerAds: 6}); v.Class == ClassShop {
 		t.Errorf("средний объём без доп. сигналов не должен резать: %v", v.Reasons)

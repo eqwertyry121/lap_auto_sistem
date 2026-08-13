@@ -35,7 +35,7 @@ type AdFacts struct {
 	IsRenewed       bool   // автообновление объявления
 	PriceEUR        float64
 	MedianEUR       float64
-	SellerAds       int // активных лотов продавца по реестру (М3)
+	SellerAds       int // лотов продавца за все время в датасете (исторический M3-сигнал)
 	SellerRecentAds int // лотов этого user_id, недавно виденных в выдаче/research
 	SellerAgeDays   int // возраст аккаунта в днях; -1 = неизвестен (М6)
 	Reviews         int // отзывы продавца
@@ -139,15 +139,15 @@ func L1(f AdFacts) Verdict {
 	// М5 — маркеры описаний (взвешенная сумма слов из текста; М7 «мультигород»
 	// считается внутри markerWeight).
 	weight, reasons := markerWeight(textNorm)
-	if f.SellerAds >= sellerAdsHardThreshold {
-		return Verdict{ClassShop,
-			[]string{fmt.Sprintf("М3: у продавца %d лотов в датасете (≥%d) — похоже на перекупа/магазин",
-				f.SellerAds, sellerAdsHardThreshold)}}
-	}
 	if f.SellerRecentAds >= sellerRecentHardThreshold {
 		return Verdict{ClassShop,
 			[]string{fmt.Sprintf("М3-recent: у продавца %d свежих лотов (≥%d) — активный перекуп/магазин",
 				f.SellerRecentAds, sellerRecentHardThreshold)}}
+	}
+	if f.SellerAds >= sellerAdsHardThreshold && f.SellerRecentAds >= sellerRecentSoftThreshold {
+		return Verdict{ClassShop,
+			[]string{fmt.Sprintf("М3-active: у продавца %d свежих лотов и %d лотов в истории — активный перекуп/магазин",
+				f.SellerRecentAds, f.SellerAds)}}
 	}
 	if f.SellerAds >= sellerAdsSoftThreshold && (f.IsRenewed || f.Reviews >= highReviewsThreshold || weight > 0) {
 		why := []string{fmt.Sprintf("М3: у продавца %d лотов в датасете (≥%d)", f.SellerAds, sellerAdsSoftThreshold)}
@@ -176,6 +176,11 @@ func L1(f AdFacts) Verdict {
 			append([]string{fmt.Sprintf("М5: вес маркеров %.1f ≥ %.1f", weight, ThresholdL1)}, reasons...)}
 	}
 
+	if f.SellerAds >= sellerAdsHardThreshold {
+		return Verdict{ClassUnknown,
+			[]string{fmt.Sprintf("М3-history: у продавца %d лотов в истории, но только %d свежих — нужен активный счетчик/ручная проверка",
+				f.SellerAds, f.SellerRecentAds)}}
+	}
 	if len(reasons) > 0 {
 		// маркеры были, но порога не хватило — запоминаем для аудита
 		return Verdict{ClassUnknown, reasons}

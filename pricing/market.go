@@ -33,7 +33,8 @@ type Lot struct {
 	Price       float64 // нормализовано в EUR
 	Posted      time.Time
 	Kind        string // NEW / USED / BROKEN / UNKNOWN
-	IsShop      bool   // is_trader или kp_izlog
+	IsShop      bool   // подтвержденный магазин/перекуп по L1
+	SellerClass string // PRIVATE / SHOP / UNKNOWN, если лот загружен из research.db
 	L2Reviewed  bool   // L2 ran with full description and manual labels
 	LaptopModel string
 	CPUModel    string
@@ -288,7 +289,9 @@ WHERE a.fetch_status='OK'
 			SellerTraderSeen:  sellerTraderSeen != 0,
 			SellerKPIzlogSeen: sellerKPIzlogSeen != 0,
 		}
-		l.IsShop = filters.L1(filterFacts).Class == filters.ClassShop
+		sellerVerdict := filters.L1(filterFacts)
+		l.SellerClass = sellerVerdict.Class
+		l.IsShop = sellerVerdict.Class == filters.ClassShop
 		l2 := filters.L2(filterFacts)
 		l.L2Reviewed = true
 		if l2.Class == filters.JunkPartsOnly {
@@ -353,7 +356,7 @@ func (m *Market) statsPool(windowDays int) []Lot {
 	cutoff := m.builtAt.AddDate(0, 0, -windowDays)
 	out := make([]Lot, 0, len(m.lots)/2)
 	for _, l := range m.lots {
-		if l.CPUScore <= 0 || l.IsShop || l.Kind != "USED" || l.URL == "" {
+		if l.CPUScore <= 0 || !marketSellerEligible(l) || l.Kind != "USED" || l.URL == "" {
 			continue
 		}
 		// PLAN_v5: рынок ноутбуков с дискретной графикой — без dGPU лоты
@@ -387,13 +390,23 @@ func hasDiscreteGPU(l Lot) bool {
 	}
 }
 
+func marketSellerEligible(l Lot) bool {
+	if l.IsShop {
+		return false
+	}
+	if l.SellerClass != "" && l.SellerClass != filters.ClassPrivate {
+		return false
+	}
+	return true
+}
+
 // hedonicTraining — обучающая выборка OLS (PLAN_v4 §3.5): USED, частники,
 // 10–5000€, cpu_score>0, возраст ≤ 90 дней.
 func (m *Market) hedonicTraining(windowDays int) []Lot {
 	cutoff := m.builtAt.AddDate(0, 0, -windowDays)
 	var out []Lot
 	for _, l := range m.lots {
-		if l.Kind != "USED" || l.IsShop || l.CPUScore <= 0 || l.URL == "" {
+		if l.Kind != "USED" || !marketSellerEligible(l) || l.CPUScore <= 0 || l.URL == "" {
 			continue
 		}
 		if l.Price < priceFloor || l.Price > priceCeil {
