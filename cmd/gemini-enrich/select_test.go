@@ -51,6 +51,7 @@ CREATE TABLE research_specs (
 		{6, 999999, "RSD"}, // распознан CPU — исключён
 		{7, 999998, "RSD"}, // уже обработан Gemini — исключён
 		{8, 999997, "RSD"},
+		{9, 999996, "RSD"},
 	}
 	for _, r := range rows {
 		if _, err := db.Exec(
@@ -66,6 +67,9 @@ CREATE TABLE research_specs (
 		t.Fatal(err)
 	}
 	if _, err := db.Exec(`INSERT INTO research_specs (ad_id, cpu_score, source) VALUES (8, 0, 'model-catalog')`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec(`INSERT INTO research_specs (ad_id, cpu_score, source) VALUES (9, 0, 'regex-no-score')`); err != nil {
 		t.Fatal(err)
 	}
 
@@ -157,5 +161,107 @@ CREATE TABLE research_specs (
 	}
 	if cpu != "AMD Ryzen 7 8840U" || score != 14125 || source != "gemini-text" {
 		t.Fatalf("writeBack cpu=%q score=%.0f source=%q", cpu, score, source)
+	}
+}
+
+func TestDeterministicSpecsUsesExactModelCatalog(t *testing.T) {
+	sp, source, ok := deterministicSpecs(candidate{
+		Title: "Lenovo ThinkPad E14 Gen 6 Ryzen 7 16GB 512GB",
+		Desc:  "Model 21M3003PCX",
+	}, nil)
+	if !ok {
+		t.Fatal("deterministicSpecs did not match exact model catalog")
+	}
+	if source != "model-catalog" {
+		t.Fatalf("source = %q, want model-catalog", source)
+	}
+	if sp.LaptopModel != "Lenovo ThinkPad E14 Gen 6 21M3003PCX" ||
+		sp.CPU != "Ryzen 7 7735HS" ||
+		sp.RAMGB != 16 ||
+		sp.SSDGB != 512 ||
+		!sp.GPUIntegrated() {
+		t.Fatalf("specs = %+v", sp)
+	}
+}
+
+func TestDeterministicSpecsUsesRegexWhenCPUIsExact(t *testing.T) {
+	cpus := map[string]hw.CPU{
+		hw.Key("Intel Core i7-10850H"): {Name: "Intel Core i7-10850H", Score: 7198},
+	}
+	sp, source, ok := deterministicSpecs(candidate{
+		Title: "Fujitsu H7510 i7-10850H,32gb ddr4,512NVMe,15.6,Nvidia-4gb",
+		Desc:  "NVIDIA Quadro T1000",
+	}, cpus)
+	if !ok {
+		t.Fatal("deterministicSpecs did not use regex CPU")
+	}
+	if source != "regex" {
+		t.Fatalf("source = %q, want regex", source)
+	}
+	if sp.CPU != "i7-10850H" || sp.RAMGB != 32 || sp.SSDGB != 512 || sp.GPU != "Quadro T1000" {
+		t.Fatalf("specs = %+v", sp)
+	}
+}
+
+func TestDeterministicSpecsMarksRegexNoScore(t *testing.T) {
+	sp, source, ok := deterministicSpecs(candidate{
+		Title: "Lenovo Yoga Ryzen AI 7 350 16GB 512GB Radeon 860M",
+		Desc:  "excellent",
+	}, nil)
+	if !ok {
+		t.Fatal("deterministicSpecs did not use exact CPU text")
+	}
+	if source != "regex-no-score" {
+		t.Fatalf("source = %q, want regex-no-score", source)
+	}
+	if sp.CPU != "Ryzen AI 7 350" || sp.GPU != "integrated" {
+		t.Fatalf("specs = %+v", sp)
+	}
+}
+
+func TestDeterministicSpecsNeedsGeminiWhenCPUIsMissing(t *testing.T) {
+	if sp, source, ok := deterministicSpecs(candidate{
+		Title: "Lenovo ThinkPad E14 Gen 6 16GB 512GB",
+		Desc:  "bez oznake procesora",
+	}, nil); ok {
+		t.Fatalf("deterministicSpecs = %+v source=%q, want no deterministic specs", sp, source)
+	}
+}
+
+func TestWriteBackSourceUsesExplicitSource(t *testing.T) {
+	db, err := sql.Open("sqlite", filepath.Join(t.TempDir(), "test.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	if _, err := db.Exec(`
+CREATE TABLE research_specs (
+	ad_id INTEGER PRIMARY KEY,
+	cpu_model TEXT NOT NULL DEFAULT '',
+	cpu_score REAL NOT NULL DEFAULT 0,
+	ram_gb INTEGER NOT NULL DEFAULT 0,
+	ssd_gb INTEGER NOT NULL DEFAULT 0,
+	gpu_model TEXT NOT NULL DEFAULT '',
+	gpu_score REAL NOT NULL DEFAULT 0,
+	updated_at INTEGER NOT NULL DEFAULT 0,
+	source TEXT NOT NULL DEFAULT 'regex'
+);`); err != nil {
+		t.Fatal(err)
+	}
+
+	cpus := map[string]hw.CPU{
+		hw.Key("AMD Ryzen 7 7735HS"): {Name: "AMD Ryzen 7 7735HS", Score: 18729},
+	}
+	if err := writeBackSource(context.Background(), db, 12, geminiSpecs{CPU: "Ryzen 7 7735HS"}, "model-catalog", cpus, nil); err != nil {
+		t.Fatal(err)
+	}
+
+	var cpu, source string
+	var score float64
+	if err := db.QueryRow(`SELECT cpu_model, cpu_score, source FROM research_specs WHERE ad_id=12`).Scan(&cpu, &score, &source); err != nil {
+		t.Fatal(err)
+	}
+	if cpu != "AMD Ryzen 7 7735HS" || score != 18729 || source != "model-catalog" {
+		t.Fatalf("writeBackSource cpu=%q score=%.0f source=%q", cpu, score, source)
 	}
 }

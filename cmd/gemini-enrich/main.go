@@ -2,7 +2,7 @@
 // ступень L3-текст. Берёт самые дорогие лоты с нераспознанным CPU (у них
 // выше шанс «алмаза»), спрашивает у Gemini точные характеристики по
 // описанию+атрибутам и пишет результат обратно в research_specs
-// (source='gemini-text'). Рынок учится; повторные вызовы по уже
+// (source='model-catalog'/'regex'/'regex-no-score'/'gemini-text'). Рынок учится; повторные вызовы по уже
 // обработанным лотам запрещены (идемпотентность).
 //
 //	go run ./cmd/gemini-enrich             # бюджет 100 лотов за запуск
@@ -48,10 +48,6 @@ func main() {
 	log := slog.Default()
 
 	cfg := config.Load()
-	if cfg.GeminiAPIKey == "" {
-		log.Error("GEMINI_API_KEY не задан — обогащение невозможно")
-		os.Exit(1)
-	}
 
 	ctx, stop := context.WithCancel(context.Background())
 	defer stop()
@@ -89,15 +85,36 @@ func main() {
 	}
 	log.Info("кандидаты выбраны", "лотов", len(cands), "бюджет", *budget)
 
-	gem := vision.NewGeminiClient(cfg.GeminiAPIKey, cfg.GeminiTextModel).
-		SetLimits(cfg.GeminiConcurrency, cfg.GeminiDailyLimit).
-		SetDailyBudgetUSD(cfg.GeminiDailyBudgetUSD)
-	var recognized, attempts int
+	var gem *vision.GeminiClient
+	var recognized, processed, geminiCalls int
+	missingGeminiKey := false
 	for _, c := range cands {
 		if ctx.Err() != nil {
 			break
 		}
-		attempts++
+		processed++
+		if sp, source, ok := deterministicSpecs(c, cpus); ok {
+			if err := writeBackSource(ctx, db, c.AdID, sp, source, cpus, gpus); err != nil {
+				log.Error("запись локального результата", "ad_id", c.AdID, "source", source, "err", err)
+				continue
+			}
+			if cpu := strings.TrimSpace(sp.CPU); cpu != "" {
+				recognized++
+				log.Info("распознано локально", "ad_id", c.AdID, "source", source, "cpu", cpu, "цена", fmt.Sprintf("%.0f€", c.PriceEUR))
+			}
+			continue
+		}
+		if gem == nil {
+			if cfg.GeminiAPIKey == "" {
+				log.Error("GEMINI_API_KEY не задан — оставшиеся кандидаты требуют Gemini")
+				missingGeminiKey = true
+				break
+			}
+			gem = vision.NewGeminiClient(cfg.GeminiAPIKey, cfg.GeminiTextModel).
+				SetLimits(cfg.GeminiConcurrency, cfg.GeminiDailyLimit).
+				SetDailyBudgetUSD(cfg.GeminiDailyBudgetUSD)
+		}
+		geminiCalls++
 		sp, err := askGemini(ctx, gem, c)
 		if err != nil {
 			log.Error("gemini", "ad_id", c.AdID, "err", err)
@@ -116,7 +133,10 @@ func main() {
 		}
 		time.Sleep(time.Second) // вежливость к API
 	}
-	log.Info("обогащение завершено", "обработано", attempts, "распознано", recognized)
+	log.Info("обогащение завершено", "обработано", processed, "gemini_вызовов", geminiCalls, "распознано", recognized)
+	if missingGeminiKey {
+		os.Exit(1)
+	}
 }
 
 type candidate struct {
@@ -128,7 +148,7 @@ type candidate struct {
 }
 
 // selectCandidates — самые дорогие лоты с деталями, без распознанного CPU
-// и без попытки Gemini в прошлом; цена 10–5000€ (план §5.1). Сортировка —
+// и без финальной попытки Gemini/model-catalog/regex-no-score в прошлом; цена 10–5000€ (план §5.1). Сортировка —
 // по НОРМАЛИЗОВАННОЙ EUR-цене: сырые RSD-номиналы (×117 к EUR) иначе
 // искажают очередь «сначала самое дорогое».
 func selectCandidates(ctx context.Context, db *sql.DB, budget int, rate float64) []candidate {
@@ -140,6 +160,7 @@ WHERE a.fetch_status='OK' AND a.description != ''
 	AND COALESCE(s.cpu_score,0) = 0
 	AND COALESCE(s.source,'') NOT LIKE '%gemini%'
 	AND COALESCE(s.source,'') NOT LIKE '%model-catalog%'
+	AND COALESCE(s.source,'') NOT LIKE '%regex-no-score%'
 ORDER BY CASE upper(a.currency)
 	WHEN 'EUR' THEN a.price
 	WHEN 'RSD' THEN a.price/?
@@ -170,6 +191,42 @@ ORDER BY CASE upper(a.currency)
 	return out
 }
 
+func deterministicSpecs(c candidate, cpus map[string]hw.CPU) (geminiSpecs, string, bool) {
+	text := candidateEvidenceText(c)
+	if gs, ok := specs.LookupExactModelSpecs(text); ok {
+		return gs, "model-catalog", true
+	}
+
+	sp := specs.Extract(text)
+	if strings.TrimSpace(sp.CPU) == "" {
+		return geminiSpecs{}, "", false
+	}
+	gs := geminiSpecs{
+		LaptopModel: specs.ExtractLaptopModel(text),
+		CPU:         sp.CPU,
+		RAMGB:       sp.RAMGB,
+		SSDGB:       sp.SSDGB,
+		GPU:         sp.GPU,
+	}
+	if gs.GPU == "" && specs.LooksIntegratedGPU(text) {
+		gs.GPU = "integrated"
+	}
+
+	source := "regex"
+	if _, score := resolveCPU(sp.CPU, cpus); score == 0 {
+		source = "regex-no-score"
+	}
+	return gs, source, true
+}
+
+func candidateEvidenceText(c candidate) string {
+	parts := []string{c.Title, stripHTML(c.Desc)}
+	if strings.TrimSpace(c.AttrsJSON) != "" && strings.TrimSpace(c.AttrsJSON) != "[]" {
+		parts = append(parts, c.AttrsJSON)
+	}
+	return strings.Join(parts, " ")
+}
+
 func askGemini(ctx context.Context, gem *vision.GeminiClient, c candidate) (geminiSpecs, error) {
 	var b strings.Builder
 	fmt.Fprintf(&b, "Заголовок: %s\n", c.Title)
@@ -192,20 +249,26 @@ func parseSpecsJSON(raw string) (geminiSpecs, error) {
 	return specs.ParseGeminiSpecs(raw)
 }
 
-// writeBack — результат в research_specs (source='gemini-text'); пустой
-// результат тоже пишется — повторный вызов по лоту запрещён.
+// writeBack — результат Gemini в research_specs (source='gemini-text'); пустой
+// результат тоже пишется — повторный Gemini-вызов по лоту запрещён.
 func writeBack(ctx context.Context, db *sql.DB, adID int64, sp geminiSpecs,
+	cpus map[string]hw.CPU, gpus map[string]hw.GPU) error {
+	return writeBackSource(ctx, db, adID, sp, "gemini-text", cpus, gpus)
+}
+
+func writeBackSource(ctx context.Context, db *sql.DB, adID int64, sp geminiSpecs, source string,
 	cpus map[string]hw.CPU, gpus map[string]hw.GPU) error {
 	if err := ensureResearchSpecsLaptopModelColumn(ctx, db); err != nil {
 		return err
 	}
+	source = strings.TrimSpace(source)
+	if source == "" {
+		source = "gemini-text"
+	}
 	cpuModel, cpuScore := strings.TrimSpace(sp.CPU), 0.0
 	if cpuModel != "" {
-		for _, key := range cpuLookupKeys(cpuModel) {
-			if c, ok := cpus[key]; ok {
-				cpuModel, cpuScore = c.Name, c.Score
-				break
-			}
+		if resolved, score := resolveCPU(cpuModel, cpus); score > 0 {
+			cpuModel, cpuScore = resolved, score
 		}
 	}
 	gpuModel, gpuScore := strings.TrimSpace(sp.GPU), 0.0
@@ -216,7 +279,7 @@ func writeBack(ctx context.Context, db *sql.DB, adID int64, sp geminiSpecs,
 	}
 	_, err := db.ExecContext(ctx, `
 INSERT INTO research_specs (ad_id, laptop_model, cpu_model, cpu_score, ram_gb, ssd_gb, gpu_model, gpu_score, updated_at, source)
-VALUES (?,?,?,?,?,?,?,?,?, 'gemini-text')
+VALUES (?,?,?,?,?,?,?,?,?, ?)
 ON CONFLICT(ad_id) DO UPDATE SET
 	laptop_model=CASE WHEN excluded.laptop_model != '' THEN excluded.laptop_model ELSE research_specs.laptop_model END,
 	cpu_model=CASE WHEN excluded.cpu_model != '' THEN excluded.cpu_model ELSE research_specs.cpu_model END,
@@ -231,8 +294,20 @@ ON CONFLICT(ad_id) DO UPDATE SET
 		WHEN research_specs.source = '' THEN excluded.source
 		ELSE excluded.source || '+' || research_specs.source
 	END`,
-		adID, strings.TrimSpace(sp.LaptopModel), cpuModel, cpuScore, sp.RAMGB, sp.SSDGB, gpuModel, gpuScore, time.Now().Unix())
+		adID, strings.TrimSpace(sp.LaptopModel), cpuModel, cpuScore, sp.RAMGB, sp.SSDGB, gpuModel, gpuScore, time.Now().Unix(), source)
 	return err
+}
+
+func resolveCPU(name string, cpus map[string]hw.CPU) (string, float64) {
+	if strings.TrimSpace(name) == "" || cpus == nil {
+		return "", 0
+	}
+	for _, key := range cpuLookupKeys(name) {
+		if c, ok := cpus[key]; ok {
+			return c.Name, c.Score
+		}
+	}
+	return "", 0
 }
 
 func cpuLookupKeys(name string) []string {
