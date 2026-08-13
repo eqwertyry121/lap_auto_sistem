@@ -247,6 +247,17 @@ func TestHardwareConflictNormalization(t *testing.T) {
 	}
 }
 
+func TestSpecSourcesLine(t *testing.T) {
+	got := specSourcesLine("regex", "model-catalog", "", "gemini-photo-all", "gemini-text+regex")
+	want := "laptop:regex,cpu:model-catalog,ssd:gemini-photo-all,gpu:gemini-text+regex"
+	if got != want {
+		t.Fatalf("specSourcesLine = %q, want %q", got, want)
+	}
+	if got := specSourcesLine("", "", "", "", ""); got != "" {
+		t.Fatalf("empty specSourcesLine = %q, want empty", got)
+	}
+}
+
 func TestGeminiPhotoPromptKeepsKnownModelHint(t *testing.T) {
 	prompt := geminiPhotoPrompt(
 		"Lenovo ThinkPad E14 Gen 6 - Ryzen 7 / 16GB / 512GB",

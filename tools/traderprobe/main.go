@@ -19,7 +19,7 @@ import (
 	"kpbot/collector"
 )
 
-// Контрольный магазин из tools/eds_sample.json (точно Trgovac).
+// Контрольный магазин из сохраненного аудита KP: точно Trgovac.
 const controlShopID = 151982322
 
 func main() {

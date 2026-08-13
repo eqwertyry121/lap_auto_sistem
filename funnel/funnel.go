@@ -374,7 +374,9 @@ func Run(ctx context.Context, f *Funnel, cfg *config.Config, gem *vision.GeminiC
 	// Накопление сведений из Gemini-ступеней: модель ноутбука, причина
 	// нераспознанного CPU, явная встройка (ТЗ: фото → максимум информации).
 	laptopModel, whyNoCPU := specs.ExtractLaptopModel(ad.Name+" "+descPlain), ""
+	laptopVia := ""
 	if laptopModel != "" {
+		laptopVia = "regex"
 		tr.f("L3.1 regex: модель ноутбука из текста: %s", laptopModel)
 	}
 	integratedGPU := gpuModel == "" && specs.LooksIntegratedGPU(ad.Name+" "+descPlain)
@@ -410,6 +412,7 @@ func Run(ctx context.Context, f *Funnel, cfg *config.Config, gem *vision.GeminiC
 	merge := func(stage, viaName string, gs specs.GeminiSpecs) {
 		if gs.LaptopModel != "" && (laptopModel == "" || len(gs.LaptopModel) > len(laptopModel)) {
 			laptopModel = gs.LaptopModel
+			laptopVia = viaName
 			tr.f("%s: модель ноутбука: %s", stage, laptopModel)
 		}
 		if m, s := matchCPU(cpus, gs.CPU); s > 0 {
@@ -584,7 +587,9 @@ func Run(ctx context.Context, f *Funnel, cfg *config.Config, gem *vision.GeminiC
 	// Vision, если фото добавило модель, но всё ещё не дало точный CPU/GPU.
 
 	specsLine := buildSpecsLine(laptopModel, cpuModel, recognized.RAMGB, recognized.SSDGB, gpuModel, integratedGPU)
+	specSources := specSourcesLine(laptopVia, cpuVia, ramVia, ssdVia, gpuVia)
 	tr.f("L3 итог: конфигурация = %s (источник: %s)", specsLine, via)
+	tr.f("L3 final: spec_sources=%s", specSources)
 	configConflictReason := strings.Join(configConflicts, "; ")
 	if configConflictReason != "" {
 		tr.f("L3 итог: конфликт источников — %s", configConflictReason)
@@ -775,6 +780,9 @@ func Run(ctx context.Context, f *Funnel, cfg *config.Config, gem *vision.GeminiC
 	if configConflictReason != "" {
 		marketRef += "; config_conflict=" + configConflictReason
 	}
+	if specSources != "" {
+		marketRef += "; spec_sources=" + specSources
+	}
 	audit := storage.FunnelVerdict{
 		Code: code, Deviation: dev, GroupN: est.N, Alternatives: string(altsJSON),
 		Reason: fmt.Sprintf("L3=%s; L2=%s; %s", via, junk.Class, marketRef),
@@ -915,6 +923,22 @@ func hardwareConflict(a, b string) bool {
 		return false
 	}
 	return hardwareKey(a) != hardwareKey(b)
+}
+
+func specSourcesLine(laptop, cpu, ram, ssd, gpu string) string {
+	parts := []string{}
+	add := func(field, source string) {
+		source = strings.TrimSpace(source)
+		if source != "" {
+			parts = append(parts, field+":"+source)
+		}
+	}
+	add("laptop", laptop)
+	add("cpu", cpu)
+	add("ram", ram)
+	add("ssd", ssd)
+	add("gpu", gpu)
+	return strings.Join(parts, ",")
 }
 
 func buildSpecsLine(laptop, cpu string, ram, ssd int, gpu string, integratedGPU bool) string {

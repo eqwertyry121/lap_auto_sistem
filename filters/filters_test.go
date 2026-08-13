@@ -5,8 +5,8 @@ import (
 	"testing"
 )
 
-// Реальный мультилистинг из tools/eds_sample.json (магазин «Polovni Laptopovi»):
-// плоский текст после stripHTML (теги → пробелы).
+// Real KP multilisting snapshot (ad 151982322, shop "Polovni Laptopovi").
+// Kept inline so tests do not depend on bulky ad-detail snapshots.
 const realShopMultilisting = `✨ GARANCIJA na ispravnost 12 meseci! ✨ MOGUĆNOST ZAMENE ILI ODUSTANKA od kupovine u roku od 30 dana! ✨ MOGUĆNOST PLAĆANJA PUTEM FAKTURE ✨ Brza dostava širom Srbije! Imamo više modela na stanju. Kliknite na "SVI OGLASI" (telefon) Kliknite na "KP IZLOG" (računar) POUZDANI POLOVNI LAPTOPOVI NOVI SAD NAJTRAŽENIJI MODELI • HP EliteBook 840 G6 | i5-8265U | 16GB | 512GB SSD | 235€ • Lenovo ThinkPad T490 | i7-8665U | 16GB | 512GB SSD | 270€ • Dell Vostro 15.6" | i5-1135G7 | 16GB | 256GB SSD | 300€ OSTALI MODELI IZ PONUDE: #01-Odlican laptop Apple MacBook Pro M2 16GB 1TB 13" A2338-850€ #05-Lenovo thinkpad t15 15.6" 4K ekran i7/32gb dve grafike-650€ #12-Dell latitude 15.6" intel i5-10210U 16GB RAM 512GB SSD-300€`
 
 func TestL1_KPMarksAreShop(t *testing.T) {
