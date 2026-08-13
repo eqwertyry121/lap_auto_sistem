@@ -41,6 +41,7 @@ import (
 	"kpbot/hb"
 	"kpbot/hw"
 	"kpbot/models"
+	"kpbot/runlock"
 	"kpbot/specs"
 )
 
@@ -59,6 +60,7 @@ func main() {
 		dumpOnly          = flag.Bool("dump-only", false, "не собирать, только пересобрать CSV из уже собранной БД")
 		searchRefresh     = flag.Bool("search-refresh", false, "бэкфилл search-полей (user_id и др.) уже собранных строк без запросов /eds/")
 		heartbeatPath     = flag.String("heartbeat", "data/research.heartbeat", "heartbeat-файл живости для watchdog")
+		lockPath          = flag.String("lock", "data/research.lock", "singleton lock file")
 	)
 	flag.Parse()
 
@@ -68,6 +70,13 @@ func main() {
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
+
+	releaseLock, err := runlock.Acquire(*lockPath, runlock.Options{HeartbeatPath: *heartbeatPath})
+	if err != nil {
+		log.Error("another research instance is already running or lock is fresh", "lock", *lockPath, "err", err)
+		os.Exit(1)
+	}
+	defer releaseLock()
 
 	store, err := openResearch(*dbPath)
 	if err != nil {

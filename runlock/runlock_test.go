@@ -1,4 +1,4 @@
-package main
+package runlock
 
 import (
 	"errors"
@@ -8,18 +8,18 @@ import (
 	"time"
 )
 
-func TestAcquireSingletonRejectsFreshLock(t *testing.T) {
+func TestAcquireRejectsFreshLock(t *testing.T) {
 	dir := t.TempDir()
-	lockPath := filepath.Join(dir, "kpbot.lock")
-	heartbeatPath := filepath.Join(dir, "kpbot.heartbeat")
+	lockPath := filepath.Join(dir, "process.lock")
+	heartbeatPath := filepath.Join(dir, "process.heartbeat")
 
-	release, err := acquireSingleton(lockPath, heartbeatPath)
+	release, err := Acquire(lockPath, Options{HeartbeatPath: heartbeatPath})
 	if err != nil {
 		t.Fatalf("first acquire: %v", err)
 	}
 	defer release()
 
-	secondRelease, err := acquireSingleton(lockPath, heartbeatPath)
+	secondRelease, err := Acquire(lockPath, Options{HeartbeatPath: heartbeatPath})
 	if err == nil {
 		secondRelease()
 		t.Fatal("second acquire succeeded with fresh lock")
@@ -29,13 +29,13 @@ func TestAcquireSingletonRejectsFreshLock(t *testing.T) {
 	}
 }
 
-func TestAcquireSingletonBreaksStaleLockWithoutFreshHeartbeat(t *testing.T) {
+func TestAcquireBreaksStaleLockWithoutFreshHeartbeat(t *testing.T) {
 	dir := t.TempDir()
-	lockPath := filepath.Join(dir, "kpbot.lock")
-	heartbeatPath := filepath.Join(dir, "kpbot.heartbeat")
-	writeOldFile(t, lockPath, singletonLockStaleAfter+time.Minute)
+	lockPath := filepath.Join(dir, "process.lock")
+	heartbeatPath := filepath.Join(dir, "process.heartbeat")
+	writeOldFile(t, lockPath, defaultLockStaleAfter+time.Minute)
 
-	release, err := acquireSingleton(lockPath, heartbeatPath)
+	release, err := Acquire(lockPath, Options{HeartbeatPath: heartbeatPath})
 	if err != nil {
 		t.Fatalf("acquire stale lock: %v", err)
 	}
@@ -50,16 +50,16 @@ func TestAcquireSingletonBreaksStaleLockWithoutFreshHeartbeat(t *testing.T) {
 	}
 }
 
-func TestAcquireSingletonKeepsStaleLockWithFreshHeartbeat(t *testing.T) {
+func TestAcquireKeepsStaleLockWithFreshHeartbeat(t *testing.T) {
 	dir := t.TempDir()
-	lockPath := filepath.Join(dir, "kpbot.lock")
-	heartbeatPath := filepath.Join(dir, "kpbot.heartbeat")
-	writeOldFile(t, lockPath, singletonLockStaleAfter+time.Minute)
+	lockPath := filepath.Join(dir, "process.lock")
+	heartbeatPath := filepath.Join(dir, "process.heartbeat")
+	writeOldFile(t, lockPath, defaultLockStaleAfter+time.Minute)
 	if err := os.WriteFile(heartbeatPath, []byte("fresh\n"), 0o644); err != nil {
 		t.Fatalf("write heartbeat: %v", err)
 	}
 
-	release, err := acquireSingleton(lockPath, heartbeatPath)
+	release, err := Acquire(lockPath, Options{HeartbeatPath: heartbeatPath})
 	if err == nil {
 		release()
 		t.Fatal("acquire succeeded despite fresh heartbeat")
@@ -69,15 +69,16 @@ func TestAcquireSingletonKeepsStaleLockWithFreshHeartbeat(t *testing.T) {
 	}
 }
 
-func TestReleaseSingletonRemovesLock(t *testing.T) {
+func TestReleaseRemovesLock(t *testing.T) {
 	dir := t.TempDir()
-	lockPath := filepath.Join(dir, "kpbot.lock")
-	heartbeatPath := filepath.Join(dir, "kpbot.heartbeat")
+	lockPath := filepath.Join(dir, "process.lock")
+	heartbeatPath := filepath.Join(dir, "process.heartbeat")
 
-	release, err := acquireSingleton(lockPath, heartbeatPath)
+	release, err := Acquire(lockPath, Options{HeartbeatPath: heartbeatPath})
 	if err != nil {
 		t.Fatalf("acquire: %v", err)
 	}
+	release()
 	release()
 
 	if _, err := os.Stat(lockPath); !errors.Is(err, os.ErrNotExist) {

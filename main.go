@@ -7,7 +7,6 @@ import (
 	"log/slog"
 	"os"
 	"os/signal"
-	"path/filepath"
 	"sync/atomic"
 	"syscall"
 	"time"
@@ -21,6 +20,7 @@ import (
 	"kpbot/hb"
 	"kpbot/models"
 	"kpbot/notifier"
+	"kpbot/runlock"
 	"kpbot/storage"
 	"kpbot/vision"
 )
@@ -50,12 +50,6 @@ type botState struct {
 	buildVersion       string
 	manualPaused       atomic.Bool // пульт: ⏹ Стоп
 }
-
-const (
-	singletonLockRefreshInterval = time.Minute
-	singletonLockStaleAfter      = 10 * time.Minute
-	singletonHeartbeatStaleAfter = 3 * time.Minute
-)
 
 // enterChallengePause — реакция на антибот-челлендж KP: длинная пауза вместо
 // бессмысленного долбления (челлендж «липкий», снимается за 30–60 минут).
@@ -157,93 +151,6 @@ func loadUnixTime(src *atomic.Int64) time.Time {
 	return time.Unix(unix, 0)
 }
 
-func acquireSingleton(path, heartbeatPath string) (func(), error) {
-	release, err := createSingletonLock(path)
-	if err == nil {
-		return release, nil
-	}
-	if !os.IsExist(err) {
-		return nil, err
-	}
-	stale, staleErr := canBreakSingletonLock(path, heartbeatPath, time.Now())
-	if staleErr != nil {
-		return nil, staleErr
-	}
-	if !stale {
-		return nil, err
-	}
-	if removeErr := os.Remove(path); removeErr != nil && !os.IsNotExist(removeErr) {
-		return nil, removeErr
-	}
-	return createSingletonLock(path)
-}
-
-func createSingletonLock(path string) (func(), error) {
-	if dir := filepath.Dir(path); dir != "" && dir != "." {
-		if err := os.MkdirAll(dir, 0o755); err != nil {
-			return nil, err
-		}
-	}
-	f, err := os.OpenFile(path, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o644)
-	if err != nil {
-		return nil, err
-	}
-	_, _ = fmt.Fprintf(f, "%d\n%s\n", os.Getpid(), time.Now().Format(time.RFC3339))
-	if err := f.Close(); err != nil {
-		_ = os.Remove(path)
-		return nil, err
-	}
-	stop := make(chan struct{})
-	done := make(chan struct{})
-	go func() {
-		t := time.NewTicker(singletonLockRefreshInterval)
-		defer t.Stop()
-		defer close(done)
-		for {
-			select {
-			case <-stop:
-				return
-			case <-t.C:
-				_ = touchSingletonLock(path)
-			}
-		}
-	}()
-	return func() {
-		close(stop)
-		<-done
-		_ = os.Remove(path)
-	}, nil
-}
-
-func canBreakSingletonLock(lockPath, heartbeatPath string, now time.Time) (bool, error) {
-	lockInfo, err := os.Stat(lockPath)
-	if err != nil {
-		if os.IsNotExist(err) {
-			return true, nil
-		}
-		return false, err
-	}
-	if now.Sub(lockInfo.ModTime()) < singletonLockStaleAfter {
-		return false, nil
-	}
-	if heartbeatPath == "" {
-		return true, nil
-	}
-	heartbeatInfo, err := os.Stat(heartbeatPath)
-	if err != nil {
-		if os.IsNotExist(err) {
-			return true, nil
-		}
-		return false, err
-	}
-	return now.Sub(heartbeatInfo.ModTime()) >= singletonHeartbeatStaleAfter, nil
-}
-
-func touchSingletonLock(path string) error {
-	now := time.Now()
-	return os.Chtimes(path, now, now)
-}
-
 func main() {
 	cfg := config.Load()
 	log := slog.New(slog.NewTextHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelInfo}))
@@ -252,7 +159,7 @@ func main() {
 		log.Error("invalid config", "err", err)
 		os.Exit(2)
 	}
-	releaseLock, err := acquireSingleton(cfg.LockPath, cfg.HeartbeatPath)
+	releaseLock, err := runlock.Acquire(cfg.LockPath, runlock.Options{HeartbeatPath: cfg.HeartbeatPath})
 	if err != nil {
 		log.Error("another kpbot instance is already running or lock is stale", "lock", cfg.LockPath, "err", err)
 		os.Exit(1)
