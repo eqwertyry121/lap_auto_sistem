@@ -273,6 +273,9 @@ func diamondSuppressionReason(est pricing.PriceEstimate, gpuScore float64, integ
 	if est.Level == "K3" {
 		reasons = append(reasons, "K3/OLS price estimate")
 	}
+	if est.Level == "P1" {
+		reasons = append(reasons, "broad performance-peer estimate")
+	}
 	if gpuScore <= 0 && !integratedGPU {
 		reasons = append(reasons, "unknown GPU score")
 	}
@@ -754,8 +757,13 @@ func Run(ctx context.Context, f *Funnel, cfg *config.Config, gem *vision.GeminiC
 		return silent(vcJunk, strings.Join(junk.Reasons, "; "))
 	}
 	if devOK {
-		tr.f("L4: медиана конфигурации %.0f€ (n=%d, уровень %s) · цена лота %.0f€ · отклонение %+.0f%%",
-			est.Median, est.N, est.Level, priceEUR, dev*100)
+		if est.Level == "P1" {
+			tr.f("L4: нижний квартиль близких по мощности %.0f€ (сырая медиана %.0f€, n=%d) · цена лота %.0f€ · отклонение %+.0f%%",
+				est.Median, est.RawMedian, est.N, priceEUR, dev*100)
+		} else {
+			tr.f("L4: медиана конфигурации %.0f€ (n=%d, уровень %s) · цена лота %.0f€ · отклонение %+.0f%%",
+				est.Median, est.N, est.Level, priceEUR, dev*100)
+		}
 	} else {
 		tr.f("L4: рыночной группы для конфигурации нет (мало данных KP) — сравнить не с чем")
 	}
@@ -834,8 +842,13 @@ func Run(ctx context.Context, f *Funnel, cfg *config.Config, gem *vision.GeminiC
 		}
 	}
 	if devOK {
-		marketRef = fmt.Sprintf("comparable_median=€%.0f p25=€%.0f (n=%d, %s, confidence=%s)",
-			eval.ComparableMedian, eval.ComparableP25, est.N, est.Level, eval.Confidence)
+		if est.Level == "P1" {
+			marketRef = fmt.Sprintf("performance_peer_p25=€%.0f raw_median=€%.0f (n=%d, confidence=%s)",
+				est.Median, est.RawMedian, est.N, eval.Confidence)
+		} else {
+			marketRef = fmt.Sprintf("comparable_median=€%.0f p25=€%.0f (n=%d, %s, confidence=%s)",
+				eval.ComparableMedian, eval.ComparableP25, est.N, est.Level, eval.Confidence)
+		}
 		ceilingBy := eval.OpportunityBy
 		if ceilingBy == nil {
 			ceilingBy = eval.DominatedBy
@@ -1403,6 +1416,13 @@ func specsScoreLine(laptop, cpu string, cpuScore float64, ram, ssd int, gpu stri
 }
 
 func appendMarketEvaluation(b *strings.Builder, est pricing.PriceEstimate, dev float64, eval pricing.MarketEvaluation) {
+	if est.Level == "P1" {
+		fmt.Fprintf(b, "Похожие по мощности: нижний квартиль €%.0f · медиана €%.0f · n=%d · confidence=LOW\n",
+			est.Median, est.RawMedian, est.N)
+		appendOpportunityCeiling(b, est, eval)
+		fmt.Fprintf(b, "Ориентир для решения: €%.0f · отклонение <b>%.0f%%</b>\n", est.Median, dev*100)
+		return
+	}
 	comparable := eval.ComparableMedian
 	if comparable <= 0 {
 		comparable = est.RawMedian

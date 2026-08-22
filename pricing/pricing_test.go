@@ -1216,3 +1216,39 @@ func TestBestStepUpNothingStronger(t *testing.T) {
 		t.Errorf("мощнее нет, но вернулось %d шагов", len(steps))
 	}
 }
+
+func TestPerformancePeerEstimateUsesLowMarketReference(t *testing.T) {
+	now := time.Now()
+	target := Lot{AdID: 99, Price: 450, Kind: "USED", CPUScore: 7000, GPUScore: 19000, RAMGB: 32, SSDGB: 512}
+	prices := []float64{400, 420, 440, 460, 480}
+	lots := make([]Lot, 0, len(prices))
+	for i, price := range prices {
+		lots = append(lots, Lot{
+			AdID: int64(i + 1), Price: price, Kind: "USED", URL: "https://example.test/peer",
+			Posted: now, CPUScore: 7000, GPUScore: 19000, RAMGB: 16, SSDGB: 512,
+		})
+	}
+	m := &Market{lots: lots, builtAt: now, medianWindowDays: 60, dgpuOnly: true}
+	est := m.performancePeerEstimate(target, false)
+	if est.Level != "P1" || est.N != 5 {
+		t.Fatalf("estimate = %+v", est)
+	}
+	// Each peer is normalized by +€24 for the missing 16GB RAM. The decision
+	// reference is p25 (€444), while RawMedian retains the peer median (€464).
+	if est.Median != 444 || est.P25 != 444 || est.RawMedian != 464 {
+		t.Fatalf("P1 prices = median %.0f p25 %.0f raw %.0f", est.Median, est.P25, est.RawMedian)
+	}
+}
+
+func TestPerformancePeerEstimateRequiresFivePeers(t *testing.T) {
+	now := time.Now()
+	lots := make([]Lot, 4)
+	for i := range lots {
+		lots[i] = Lot{AdID: int64(i + 1), Price: 400, Kind: "USED", URL: "https://example.test/peer",
+			Posted: now, CPUScore: 7000, GPUScore: 19000}
+	}
+	m := &Market{lots: lots, builtAt: now, medianWindowDays: 60, dgpuOnly: true}
+	if est := m.performancePeerEstimate(Lot{CPUScore: 7000, GPUScore: 19000}, false); est.Level != "" {
+		t.Fatalf("estimate with four peers = %+v", est)
+	}
+}

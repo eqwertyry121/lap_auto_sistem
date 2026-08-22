@@ -110,6 +110,7 @@ const (
 	minN_K0 = 8
 	minN_K1 = 5
 	minN_K2 = 5
+	minN_P1 = 5
 )
 
 // Ценовые границы статистики (PLAN_v4 §3.5, L0).
@@ -766,6 +767,8 @@ func confidenceFor(est PriceEstimate) string {
 		return "HIGH"
 	case (est.Level == "K1" || est.Level == "K2") && est.N >= minN_K1:
 		return "MEDIUM"
+	case est.Level == "P1" && est.N >= minN_P1:
+		return "LOW"
 	case est.Level == "K3" && est.N > 0:
 		return "LOW"
 	default:
@@ -807,6 +810,9 @@ func (m *Market) estimateFor(l Lot, leaveOneOut bool) PriceEstimate {
 			return PriceEstimate{Median: med, RawMedian: med, P25: percentile(prices, 0.25), N: n, Level: c.level}
 		}
 	}
+	if est := m.performancePeerEstimate(l, leaveOneOut); est.N >= minN_P1 {
+		return est
+	}
 	if m.hedonic != nil && m.hedonic.Usable {
 		pred := m.hedonic.Predict(l)
 		if pred <= 0 {
@@ -815,6 +821,74 @@ func (m *Market) estimateFor(l Lot, leaveOneOut bool) PriceEstimate {
 		return PriceEstimate{Median: pred, RawMedian: pred, N: m.hedonic.N, Level: "K3"}
 	}
 	return PriceEstimate{}
+}
+
+type performancePeer struct {
+	distance float64
+	price    float64
+}
+
+// performancePeerEstimate is a conservative fallback for common hardware that
+// lacks an exact CPU+GPU group. It compares nearby benchmark classes and
+// normalizes small RAM/SSD differences at used-component replacement cost.
+func (m *Market) performancePeerEstimate(target Lot, leaveOneOut bool) PriceEstimate {
+	if target.CPUScore <= 0 || target.GPUScore <= 0 || target.Composite() <= 0 {
+		return PriceEstimate{}
+	}
+	peers := make([]performancePeer, 0, 24)
+	for _, candidate := range m.candidates(m.marketWindowDays()) {
+		if leaveOneOut && candidate.AdID == target.AdID {
+			continue
+		}
+		if candidate.CPUScore <= 0 || candidate.GPUScore <= 0 || candidate.Price <= 0 {
+			continue
+		}
+		cpuRatio := candidate.CPUScore / target.CPUScore
+		gpuRatio := candidate.GPUScore / target.GPUScore
+		compRatio := candidate.Composite() / target.Composite()
+		if cpuRatio < 0.70 || cpuRatio > 1.40 || gpuRatio < 0.80 || gpuRatio > 1.25 || compRatio < 0.82 || compRatio > 1.18 {
+			continue
+		}
+		price := normalizePeerPrice(candidate, target)
+		distance := math.Abs(math.Log(cpuRatio)) + 1.5*math.Abs(math.Log(gpuRatio)) + math.Abs(math.Log(compRatio))
+		peers = append(peers, performancePeer{distance: distance, price: price})
+	}
+	if len(peers) < minN_P1 {
+		return PriceEstimate{}
+	}
+	sort.Slice(peers, func(i, j int) bool {
+		if peers[i].distance != peers[j].distance {
+			return peers[i].distance < peers[j].distance
+		}
+		return peers[i].price < peers[j].price
+	})
+	if len(peers) > 20 {
+		peers = peers[:20]
+	}
+	prices := make([]float64, 0, len(peers))
+	for _, peer := range peers {
+		prices = append(prices, peer.price)
+	}
+	med, n := robustMedian(prices)
+	if med <= 0 || n < minN_P1 {
+		return PriceEstimate{}
+	}
+	p25 := percentile(prices, 0.25)
+	// P1 is intentionally a low-market reference, not an "average price".
+	// A broad peer median can make an ordinary listing look like a bargain due
+	// to premium models and stale asking prices in the same performance class.
+	return PriceEstimate{Median: p25, RawMedian: med, P25: p25, N: n, Level: "P1"}
+}
+
+func normalizePeerPrice(peer, target Lot) float64 {
+	price := peer.Price
+	if peer.RAMGB > 0 && target.RAMGB > 0 {
+		price += float64(target.RAMGB-peer.RAMGB) * 1.5
+	}
+	if peer.SSDGB > 0 && target.SSDGB > 0 {
+		price += float64(target.SSDGB-peer.SSDGB) / 256 * 12
+	}
+	return max(price, priceFloor)
 }
 
 func pricesExcluding(items []groupPrice, adID int64) []float64 {
