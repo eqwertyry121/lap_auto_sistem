@@ -225,6 +225,18 @@ func TestParseGeminiSpecs_WhyNoCPU(t *testing.T) {
 	}
 }
 
+func TestParseGeminiSpecs_IgnoresTrailingModelText(t *testing.T) {
+	raw := `{"laptop_model":"Dell Latitude 3510","cpu":"i7-10510U","ram_gb":16,"ssd_gb":256,"gpu":"MX230","why_no_cpu":""}
+Другой вариант: {"cpu":"не использовать"}`
+	gs, err := ParseGeminiSpecs(raw)
+	if err != nil {
+		t.Fatalf("парсинг: %v", err)
+	}
+	if gs.LaptopModel != "Dell Latitude 3510" || gs.CPU != "i7-10510U" || gs.GPU != "MX230" {
+		t.Fatalf("поля первого JSON потеряны: %+v", gs)
+	}
+}
+
 func TestGPUIntegrated_Variants(t *testing.T) {
 	for _, v := range []string{
 		"integrated", "integrated graphics", "integrisana grafika",

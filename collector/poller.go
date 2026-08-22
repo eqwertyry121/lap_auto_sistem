@@ -3,6 +3,7 @@ package collector
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -34,6 +35,9 @@ func (c *Client) SearchPageFull(ctx context.Context, page int) (*models.SearchRe
 	path := apiPrefix + "search?order=posted+desc&page=" + strconv.Itoa(page) + "&" + searchQuery
 	resp, err := c.do(ctx, path)
 	if err != nil {
+		if errors.Is(err, ErrChallenge) {
+			return c.searchPageFromWeb(ctx, page)
+		}
 		return nil, err
 	}
 	defer resp.Body.Close()
@@ -44,7 +48,7 @@ func (c *Client) SearchPageFull(ctx context.Context, page int) (*models.SearchRe
 	}
 	if isChallengeBody(body) {
 		c.recordSharedCooldown(ErrChallenge)
-		return nil, ErrChallenge
+		return c.searchPageFromWeb(ctx, page)
 	}
 	if resp.StatusCode != http.StatusOK {
 		err := decodeError(resp.StatusCode, string(body))

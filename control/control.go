@@ -134,11 +134,11 @@ func (p *Panel) fetchUpdates(ctx context.Context, client *http.Client, offset in
 	u := fmt.Sprintf("https://api.telegram.org/bot%s/getUpdates?%s", p.token, q.Encode())
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, u, nil)
 	if err != nil {
-		return nil, offset, err
+		return nil, offset, fmt.Errorf("getUpdates request: %w", sanitizedTelegramError(err))
 	}
 	resp, err := client.Do(req)
 	if err != nil {
-		return nil, offset, err
+		return nil, offset, fmt.Errorf("getUpdates request: %w", sanitizedTelegramError(err))
 	}
 	defer resp.Body.Close()
 	raw, _ := io.ReadAll(io.LimitReader(resp.Body, 8<<20))
@@ -171,11 +171,11 @@ func (p *Panel) answerCallback(ctx context.Context, cbID string) error {
 	c := &http.Client{Timeout: 5 * time.Second}
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, u, nil)
 	if err != nil {
-		return err
+		return fmt.Errorf("answerCallbackQuery request: %w", sanitizedTelegramError(err))
 	}
 	resp, err := c.Do(req)
 	if err != nil {
-		return err
+		return fmt.Errorf("answerCallbackQuery request: %w", sanitizedTelegramError(err))
 	}
 	defer resp.Body.Close()
 	raw, _ := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
@@ -356,13 +356,14 @@ func (p *Panel) sendWithKeyboard(ctx context.Context, text string, keyboard map[
 	u := fmt.Sprintf("https://api.telegram.org/bot%s/sendMessage", p.token)
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, u, bytes.NewReader(body))
 	if err != nil {
+		slog.Error("пульт: панель", "err", sanitizedTelegramError(err))
 		return
 	}
 	req.Header.Set("Content-Type", "application/json")
 	c := &http.Client{Timeout: 20 * time.Second}
 	resp, err := c.Do(req)
 	if err != nil {
-		slog.Error("пульт: панель", "err", err)
+		slog.Error("пульт: панель", "err", sanitizedTelegramError(err))
 		return
 	}
 	defer resp.Body.Close()
@@ -387,6 +388,13 @@ func telegramCtlResponseError(method string, status int, raw []byte) error {
 		return fmt.Errorf("%s: HTTP %d: %s", method, status, desc)
 	}
 	return nil
+}
+
+func sanitizedTelegramError(err error) error {
+	if uerr, ok := err.(*url.Error); ok {
+		return uerr.Err
+	}
+	return err
 }
 
 func splitChunks(text string, limit int) []string {

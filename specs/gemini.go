@@ -63,12 +63,11 @@ func ParseGeminiSpecs(raw string) (GeminiSpecs, error) {
 	s = strings.ReplaceAll(s, "```json", "")
 	s = strings.ReplaceAll(s, "```", "")
 	start := strings.Index(s, "{")
-	end := strings.LastIndex(s, "}")
-	if start < 0 || end <= start {
+	if start < 0 {
 		return GeminiSpecs{}, fmt.Errorf("нет JSON в ответе: %s", truncateSpecs(s, 120))
 	}
 	var sp GeminiSpecs
-	if err := json.Unmarshal([]byte(s[start:end+1]), &sp); err != nil {
+	if err := json.NewDecoder(strings.NewReader(s[start:])).Decode(&sp); err != nil {
 		return GeminiSpecs{}, fmt.Errorf("разбор JSON: %w", err)
 	}
 	return sp, nil

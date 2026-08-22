@@ -2,11 +2,23 @@ package notifier
 
 import (
 	"context"
+	"errors"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
+	"strings"
 	"sync/atomic"
 	"testing"
 )
+
+func TestSanitizedTelegramErrorDoesNotExposeTokenURL(t *testing.T) {
+	const secret = "123456:SECRET"
+	err := &url.Error{Op: "Post", URL: "https://api.telegram.org/bot" + secret + "/sendMessage", Err: errors.New("network down")}
+	got := sanitizedTelegramError(err).Error()
+	if strings.Contains(got, secret) || got != "network down" {
+		t.Fatalf("sanitized error = %q", got)
+	}
+}
 
 // fakeTG — тестовый Telegram-сервер: ok переключается атомарно.
 func fakeTG(t *testing.T, ok *atomic.Bool) *httptest.Server {

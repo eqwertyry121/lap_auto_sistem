@@ -1,9 +1,8 @@
 ﻿# watchdog.ps1 — liveness watchdog for kpbot/research (PLAN_v4, Phase 0).
 #
-# Checks heartbeat-file FRESHNESS, not process presence in the OS list:
-# a "running" but hung process (scheduler deadlock, endless HTTP request)
-# does not refresh its heartbeat file, so the watchdog restarts it.
-# A dead process does not refresh either — one criterion covers both.
+# Checks both process presence and heartbeat freshness. Process presence catches
+# an immediate exit even while the last heartbeat is still fresh; freshness
+# catches a running but hung process.
 #
 # Freshness thresholds: kpbot <= 3 min, research <= 15 min (heartbeat is
 # written every minute from a dedicated goroutine, independent of
@@ -30,6 +29,7 @@ $wlog  = Join-Path $data 'watchdog.log'
 
 $thresholdMin = @{ 'kpbot' = 3; 'research' = 15 }
 $exeName      = @{ 'kpbot' = 'kpbot.exe'; 'research' = 'research.exe' }
+$lockName     = @{ 'kpbot' = 'kpbot.lock'; 'research' = 'research.lock' }
 $outLogName   = @{ 'kpbot' = 'bot.log'; 'research' = 'research_details.log' }
 $errLogName   = @{ 'kpbot' = 'bot.err.log'; 'research' = 'research_details.err.log' }
 $services     = @('kpbot')
@@ -45,6 +45,12 @@ function Write-WatchLog([string]$msg) {
 function Restart-Service([string]$name) {
     Get-Process $name -ErrorAction SilentlyContinue | Stop-Process -Force
     Start-Sleep -Seconds 2
+    # A forced stop cannot run the application's deferred lock cleanup. At this
+    # point no process with this name exists, so its singleton lock is stale.
+    $lock = Join-Path $data $lockName[$name]
+    if (Test-Path $lock) {
+        Remove-Item -LiteralPath $lock -Force
+    }
     foreach ($f in @((Join-Path $data $outLogName[$name]), (Join-Path $data $errLogName[$name]))) {
         if (Test-Path $f) {
             Move-Item $f "$f.1" -Force   # rotate: history is preserved
@@ -57,6 +63,12 @@ function Restart-Service([string]$name) {
 }
 
 foreach ($name in $services) {
+    $process = Get-Process $name -ErrorAction SilentlyContinue
+    if (-not $process) {
+        Write-WatchLog "${name}: process missing"
+        Restart-Service $name
+        continue
+    }
     $hb    = Join-Path $data "$name.heartbeat"
     $fresh = $false
     if (Test-Path $hb) {

@@ -3,6 +3,7 @@ package collector
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -17,6 +18,9 @@ func (c *Client) FetchDetail(ctx context.Context, adID int64) (*models.AdDetail,
 	path := apiPrefix + "eds/" + strconv.FormatInt(adID, 10)
 	resp, err := c.do(ctx, path)
 	if err != nil {
+		if errors.Is(err, ErrChallenge) {
+			return c.detailFromWeb(ctx, adID)
+		}
 		return nil, err
 	}
 	defer resp.Body.Close()
@@ -27,7 +31,7 @@ func (c *Client) FetchDetail(ctx context.Context, adID int64) (*models.AdDetail,
 	}
 	if isChallengeBody(body) {
 		c.recordSharedCooldown(ErrChallenge)
-		return nil, ErrChallenge
+		return c.detailFromWeb(ctx, adID)
 	}
 	if resp.StatusCode != http.StatusOK {
 		err := decodeError(resp.StatusCode, string(body))

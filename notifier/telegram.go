@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"time"
 )
 
@@ -79,13 +80,13 @@ func (t *Telegram) send(ctx context.Context, text, openURL string) error {
 	url := fmt.Sprintf("%s/bot%s/sendMessage", t.baseURL, t.token)
 	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(body))
 	if err != nil {
-		return err
+		return fmt.Errorf("telegram: %w", sanitizedTelegramError(err))
 	}
 	httpReq.Header.Set("Content-Type", "application/json")
 
 	resp, err := t.http.Do(httpReq)
 	if err != nil {
-		return fmt.Errorf("telegram: %w", err)
+		return fmt.Errorf("telegram: %w", sanitizedTelegramError(err))
 	}
 	defer resp.Body.Close()
 	raw, _ := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
@@ -131,12 +132,12 @@ func (t *Telegram) SendRawDirect(ctx context.Context, text, url string) (int64, 
 	apiURL := fmt.Sprintf("%s/bot%s/sendMessage", t.baseURL, t.token)
 	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, apiURL, bytes.NewReader(body))
 	if err != nil {
-		return 0, err
+		return 0, fmt.Errorf("telegram: %w", sanitizedTelegramError(err))
 	}
 	httpReq.Header.Set("Content-Type", "application/json")
 	resp, err := t.http.Do(httpReq)
 	if err != nil {
-		return 0, fmt.Errorf("telegram: %w", err)
+		return 0, fmt.Errorf("telegram: %w", sanitizedTelegramError(err))
 	}
 	defer resp.Body.Close()
 	raw, _ := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
@@ -154,4 +155,11 @@ func (t *Telegram) SendRawDirect(ctx context.Context, text, url string) (int64, 
 		return 0, fmt.Errorf("telegram: %s", tr.Description)
 	}
 	return tr.Result.MessageID, nil
+}
+
+func sanitizedTelegramError(err error) error {
+	if uerr, ok := err.(*url.Error); ok {
+		return uerr.Err
+	}
+	return err
 }

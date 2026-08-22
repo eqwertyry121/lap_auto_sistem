@@ -17,7 +17,7 @@ Canonical implementation plan: [PLAN.md](PLAN.md).
 ## Architecture
 
 ```text
-KP Search API
+KP Search API (server-rendered page fallback on anti-bot challenge)
   -> storage durable queue
   -> KP detail fetch
   -> L0/L1/L2 deterministic filters
