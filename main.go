@@ -295,8 +295,12 @@ func main() {
 		}
 	}
 
+	// Поиск свежих объявлений не должен ждать, пока последовательный worker
+	// обработает старый backlog или долгий запрос Gemini.
+	go processingLoop(ctx, kp, store, cfg, log, st, fnl, gemini, tg)
+
 	// Первый цикл сразу, дальше по таймеру.
-	pollOnce(ctx, kp, store, cfg, log, st, fnl, gemini, tg)
+	pollOnce(ctx, kp, store, cfg, log, st)
 
 	ticker := time.NewTicker(cfg.PollInterval)
 	defer ticker.Stop()
@@ -312,7 +316,7 @@ func main() {
 			log.Info("бот остановлен")
 			return
 		case <-ticker.C:
-			pollOnce(ctx, kp, store, cfg, log, st, fnl, gemini, tg)
+			pollOnce(ctx, kp, store, cfg, log, st)
 		}
 	}
 }
@@ -417,7 +421,7 @@ func sendDigest(ctx context.Context, cfg *config.Config, store *storage.Store,
 	}
 }
 
-func pollOnce(ctx context.Context, kp *collector.Client, store *storage.Store, cfg *config.Config, log *slog.Logger, st *botState, fnl *funnel.Funnel, gem *vision.GeminiClient, tg *notifier.Telegram) {
+func pollOnce(ctx context.Context, kp *collector.Client, store *storage.Store, cfg *config.Config, log *slog.Logger, st *botState) {
 	// Ручной стоп из пульта: поллинг на паузе, процесс и пульт живы.
 	if st.manualPaused.Load() {
 		st.beat.SetState("paused")
@@ -437,7 +441,18 @@ func pollOnce(ctx context.Context, kp *collector.Client, store *storage.Store, c
 	if !discoverFreshListings(ctx, kp, store, cfg, log, st) {
 		return
 	}
-	processDueListings(ctx, kp, store, cfg, log, st, fnl, gem, tg)
+}
+
+func processingLoop(ctx context.Context, kp *collector.Client, store *storage.Store, cfg *config.Config,
+	log *slog.Logger, st *botState, fnl *funnel.Funnel, gem *vision.GeminiClient, tg *notifier.Telegram) {
+	for ctx.Err() == nil {
+		processDueListings(ctx, kp, store, cfg, log, st, fnl, gem, tg)
+		select {
+		case <-ctx.Done():
+			return
+		case <-time.After(2 * time.Second):
+		}
+	}
 }
 
 func discoverFreshListings(ctx context.Context, kp *collector.Client, store *storage.Store, cfg *config.Config, log *slog.Logger, st *botState) bool {
@@ -515,6 +530,9 @@ func shouldFetchNextLiveSearchPage(res *models.SearchResults, page, maxPages int
 
 func processDueListings(ctx context.Context, kp *collector.Client, store *storage.Store, cfg *config.Config, log *slog.Logger, st *botState, fnl *funnel.Funnel, gem *vision.GeminiClient, tg *notifier.Telegram) {
 	for {
+		if st.manualPaused.Load() || time.Now().Before(st.pausedUntil) {
+			return
+		}
 		batch, err := store.ClaimDueListings(ctx, []models.ProcessState{
 			models.ProcessDetailPending,
 			models.ProcessEvaluating,
@@ -527,7 +545,7 @@ func processDueListings(ctx context.Context, kp *collector.Client, store *storag
 			return
 		}
 		for _, l := range batch {
-			if ctx.Err() != nil {
+			if ctx.Err() != nil || st.manualPaused.Load() || time.Now().Before(st.pausedUntil) {
 				return
 			}
 			if banned, hit := filters.IsBannedModel(l.Title, cfg.BannedModels); banned {
