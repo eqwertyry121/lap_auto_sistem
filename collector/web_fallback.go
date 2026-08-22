@@ -46,7 +46,7 @@ type nextAd struct {
 	Name                      string             `json:"name"`
 	Description               string             `json:"description"`
 	DescriptionSnippetDecoded string             `json:"descriptionSnippetDecoded"`
-	PriceNumber               float64            `json:"priceNumber"`
+	PriceNumber               models.FlexFloat   `json:"priceNumber"`
 	CurrencyAcronym           string             `json:"currencyAcronym"`
 	Location                  string             `json:"location"`
 	AdURL                     string             `json:"adUrl"`
@@ -94,7 +94,7 @@ func (c *Client) searchPageFromWeb(ctx context.Context, page int) (*models.Searc
 			continue
 		}
 		result.Ads = append(result.Ads, models.SearchAd{
-			AdID: id, UserID: a.UserID, Name: a.Name, Price: models.FlexFloat(a.PriceNumber),
+			AdID: id, UserID: a.UserID, Name: a.Name, Price: a.PriceNumber,
 			Currency: a.CurrencyAcronym, LocationName: a.Location, AdURL: a.AdURL,
 			Posted: a.PostedRaw, PhotoPath1: a.SmallImage, Condition: a.ConditionID,
 			Exchange: a.IsExchange, KPIzlog: a.KPIzlog, IsRenewed: a.IsRenewed,
@@ -119,7 +119,7 @@ func (c *Client) detailFromWeb(ctx context.Context, adID int64) (*models.AdDetai
 	}
 	d := &models.AdDetail{
 		AdID: a.ID, Name: a.Name, Description: a.Description,
-		Price: models.FlexFloat(a.PriceNumber), Currency: a.CurrencyAcronym,
+		Price: a.PriceNumber, Currency: a.CurrencyAcronym,
 		Owner: a.OwnerName, AdURL: a.AdURL, Condition: a.ConditionID,
 		KPIzlog: a.KPIzlog, Attributes: a.AdAttributes,
 	}

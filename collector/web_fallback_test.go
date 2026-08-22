@@ -34,3 +34,15 @@ func TestParseCount(t *testing.T) {
 		}
 	}
 }
+
+func TestNextAdPriceNumberAcceptsStringAndNumber(t *testing.T) {
+	for raw, want := range map[string]float64{`{"priceNumber":"450"}`: 450, `{"priceNumber":465}`: 465} {
+		var ad nextAd
+		if err := json.Unmarshal([]byte(raw), &ad); err != nil {
+			t.Fatalf("unmarshal %s: %v", raw, err)
+		}
+		if got := float64(ad.PriceNumber); got != want {
+			t.Fatalf("price for %s = %.0f, want %.0f", raw, got, want)
+		}
+	}
+}

@@ -54,7 +54,6 @@ type Config struct {
 	// модель→железо), а НЕ для цен. Цены — только наши данные KP.
 	WebResearch  bool // WEB_RESEARCH=0: выключить интернет-определение железа (по умолчанию включён)
 	ManualMinEUR int  // MANUAL_MIN_EUR: алерт «нужно посмотреть» только от этой цены (400)
-	MooseMinEUR  int  // MOOSE_MIN_EUR: сводка редкого железа только от этой цены (400)
 
 	// PLAN_v5: арбитраж ноутбуков с дискретной графикой.
 	BannedModels []string // BANNED_MODELS: запрещённые линейки через запятую (macbook)
@@ -117,7 +116,6 @@ func loadWithEnv(r *envReader) *Config {
 
 		WebResearch:  r.bool("WEB_RESEARCH", true),
 		ManualMinEUR: r.int("MANUAL_MIN_EUR", 400),
-		MooseMinEUR:  r.int("MOOSE_MIN_EUR", 400),
 
 		BannedModels: r.list("BANNED_MODELS", "macbook"),
 		RequireDGPU:  r.bool("REQUIRE_DGPU", true),
@@ -180,8 +178,8 @@ func (c *Config) Validate() error {
 	if c.MarketTolPct < 0 || c.MarketTolPct > 100 {
 		return fmt.Errorf("MARKET_TOL_PCT must be in 0..100")
 	}
-	if c.ManualMinEUR < 0 || c.MooseMinEUR < 0 {
-		return fmt.Errorf("MANUAL_MIN_EUR and MOOSE_MIN_EUR must be >= 0")
+	if c.ManualMinEUR < 0 {
+		return fmt.Errorf("MANUAL_MIN_EUR must be >= 0")
 	}
 	if _, err := time.Parse("15:04", c.DigestAt); err != nil {
 		return fmt.Errorf("DIGEST_AT must be HH:MM: %w", err)

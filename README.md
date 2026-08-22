@@ -120,7 +120,6 @@ If Telegram variables are absent, alerts are printed to the console.
 | `REQUIRE_DGPU` | `1` | ignore laptops without discrete GPU |
 | `WEB_RESEARCH` | `1` | exact model/SKU hardware lookup |
 | `MANUAL_MIN_EUR` | `400` | manual-review alert minimum |
-| `MOOSE_MIN_EUR` | `400` | rare-hardware summary minimum |
 | `LOCK_PATH` | `data/kpbot.lock` | singleton process lock |
 | `KP_COOLDOWN_PATH` | `data/kp_cooldown` | shared KP cooldown file |
 | `KP_RATE_COOLDOWN_SEC` | `90` | shared cooldown after KP 429 |

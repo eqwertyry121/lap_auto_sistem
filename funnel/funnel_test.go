@@ -91,7 +91,7 @@ func TestDecideL5(t *testing.T) {
 		{"сильно дороже → тихо", func(in *l5Input) { in.Dev = 0.25 }, vcExpensive},
 		{"нет CPU → вручную", func(in *l5Input) { in.CPUName = ""; in.CPUScore = 0 }, vcManual},
 		{"CPU назван, но без балла → проверка", func(in *l5Input) { in.CPUScore = 0 }, vcCheck},
-		{"железо есть, сравнивать не с чем → RARE_NO_MARKET", func(in *l5Input) { in.DevOK = false }, vcMoose},
+		{"нет доказанной группы → тихий NO_MARKET", func(in *l5Input) { in.DevOK = false }, vcNoMarket},
 	}
 	for _, c := range cases {
 		in := base
@@ -189,6 +189,19 @@ func TestStepUpOutclassesFujitsuH7510Case(t *testing.T) {
 	}
 }
 
+func TestStepUpOutclassesDellG3GTX1650TiCase(t *testing.T) {
+	target := pricing.Lot{
+		AdID: 194704705, Price: 450, CPUScore: 6871, GPUScore: 18921,
+	}
+	step := pricing.Lot{
+		AdID: 194369817, Title: "Acer Nitro 5", URL: "https://example.test/acer-nitro-5",
+		Price: 465, CPUScore: 9482, GPUScore: 22740,
+	}
+	if !stepUpOutclasses(target, &step) {
+		t.Fatal("Dell G3 alert must be suppressed: +€15 gives an RTX 3050 and >=15% composite gain")
+	}
+}
+
 func TestWithoutProductionOLSKeepsAlternatives(t *testing.T) {
 	dom := pricing.Lot{AdID: 2, URL: "https://example.test/dom", Price: 210, CPUScore: 10000}
 	step := pricing.Lot{AdID: 3, URL: "https://example.test/step", Price: 220, CPUScore: 12000}
@@ -259,7 +272,7 @@ func TestReviewAlertSuppressionForUnknownSeller(t *testing.T) {
 	if !strings.Contains(reason, "unknown seller type") || !strings.Contains(reason, "garancija") {
 		t.Fatalf("review suppression reason = %q", reason)
 	}
-	for _, code := range []string{vcManual, vcCheck, vcMoose} {
+	for _, code := range []string{vcManual, vcCheck} {
 		gotCode, gotReason := applyReviewAlertSuppression(code, reason)
 		if gotCode != vcReviewSuppressed || gotReason == "" {
 			t.Fatalf("code %s suppression = %s/%q, want %s/reason", code, gotCode, gotReason, vcReviewSuppressed)
@@ -619,42 +632,6 @@ func TestManualAlertWorthy(t *testing.T) {
 		if got := manualAlertWorthy(c.price, c.minEUR); got != c.want {
 			t.Errorf("manualAlertWorthy(%.2f, %d) = %v, want %v", c.price, c.minEUR, got, c.want)
 		}
-	}
-}
-
-func TestMooseAlertWorthy(t *testing.T) {
-	cases := []struct {
-		price  float64
-		minEUR int
-		want   bool
-	}{
-		{399.99, 400, false}, // дешевле порога — только аудит
-		{400, 400, true},     // ровно порог — сводка в Telegram
-		{1100, 400, true},
-		{30, 400, false},
-	}
-	for _, c := range cases {
-		if got := mooseAlertWorthy(c.price, c.minEUR); got != c.want {
-			t.Errorf("mooseAlertWorthy(%.2f, %d) = %v, want %v", c.price, c.minEUR, got, c.want)
-		}
-	}
-}
-
-func TestMooseAlertText_NoOwnerClaims(t *testing.T) {
-	// PLAN_v8: текст НЕ характеризует продавца. Формулировка v7 «владелец
-	// лось, но я добыл инфу» клеветала на продавцов, у которых спеки указаны
-	// в самом объявлении (кейсы дня 2026-08-06: Legion 5, Acer VX15).
-	ad := models.SearchAd{Name: "Lenovo Legion 5 slim 16 Ryzen 7 7735hs/16gb/1TB/4060",
-		AdURL: "/kompjuteri-laptop-i-tablet/laptopovi/oglas/194373542"}
-	lot := pricing.Lot{Price: 1100, CPUScore: 13693, GPUScore: 51866}
-	text := mooseAlertText(ad, "Ryzen 7 7735HS · 16GB · SSD 1024GB · RTX 4060", lot, "")
-	for _, banned := range []string{"ВЛАДЕЛЕЦ", "владелец", "добыл"} {
-		if strings.Contains(text, banned) {
-			t.Errorf("в тексте есть %q (характеристика продавца): %s", banned, text)
-		}
-	}
-	if !strings.Contains(text, "СРАВНИТЬ НЕ С ЧЕМ") {
-		t.Errorf("нет честного диагноза «сравнить не с чем»: %s", text)
 	}
 }
 

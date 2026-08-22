@@ -41,9 +41,8 @@ const (
 	vcOutclassed       = "OUTCLASSED"
 	vcSuppressed       = "DIAMOND_SUPPRESSED"
 	vcReviewSuppressed = "REVIEW_SUPPRESSED"
-	vcBanMac           = "BAN_MAC"        // PLAN_v5: запрещённая линейка (MacBook)
-	vcNoGpu            = "NO_GPU"         // PLAN_v5: нет дискретной видеокарты
-	vcMoose            = "RARE_NO_MARKET" // железо добыто, но в данных KP не с чем сравнить
+	vcBanMac           = "BAN_MAC" // PLAN_v5: запрещённая линейка (MacBook)
+	vcNoGpu            = "NO_GPU"  // PLAN_v5: нет дискретной видеокарты
 )
 
 const (
@@ -178,9 +177,9 @@ func decideL5(in l5Input) string {
 		return vcOutclassed
 	}
 	if !in.DevOK {
-		// Железо опознано, но в НАШИХ данных KP нет группы для сравнения
-		// (новое/редкое железо). Не молчим — шлём сводку «Владелец лось».
-		return vcMoose
+		// Отсутствие достаточно большой comparable-группы не доказывает ни
+		// редкость, ни выгодную цену. Без доказательства сделки алерт запрещён.
+		return vcNoMarket
 	}
 	if in.Dev > in.marketTol {
 		return vcExpensive // дороже рынка — не интересно
@@ -207,12 +206,6 @@ func manualAlertWorthy(priceEUR float64, minEUR int) bool {
 	return priceEUR >= float64(minEUR)
 }
 
-// mooseAlertWorthy — порог цены для сводки редкого железа (PLAN_v8): дешёвое редкое
-// железо без рыночной группы — шум, дешевле minEUR пишем только в аудит.
-func mooseAlertWorthy(priceEUR float64, minEUR int) bool {
-	return priceEUR >= float64(minEUR)
-}
-
 func reviewAlertSuppressionReason(sellerClass string, sellerReasons []string) string {
 	if sellerClass != filters.ClassUnknown {
 		return ""
@@ -229,7 +222,7 @@ func applyReviewAlertSuppression(code, reason string) (string, string) {
 		return code, ""
 	}
 	switch code {
-	case vcManual, vcCheck, vcMoose:
+	case vcManual, vcCheck:
 		return vcReviewSuppressed, reason
 	default:
 		return code, ""
@@ -249,6 +242,11 @@ func stepUpOutclasses(target pricing.Lot, step *pricing.Lot) bool {
 	powerGain := (stepComp - targetComp) / targetComp
 	valueRatio := step.ValuePer1000() / target.ValuePer1000()
 	marginalEURPer1000 := dPrice / ((stepComp - targetComp) / 1000)
+	// Почти та же цена за заметно более мощное железо делает исходный лот
+	// бессмысленным независимо от строгого value-ratio.
+	if step.Price <= target.Price*1.05 && powerGain >= 0.15 {
+		return true
+	}
 	return powerGain >= stepUpPowerGainMin && (valueRatio >= stepUpValueRatioMin || marginalEURPer1000 <= 2)
 }
 
@@ -558,7 +556,7 @@ func Run(ctx context.Context, f *Funnel, cfg *config.Config, gem *vision.GeminiC
 	// Ступени Gemini вызываются, пока реально не хватает ИМЕНИ CPU или
 	// дискретной GPU. CPU, который regex уже назвал, но которого ещё нет в
 	// hw.db, не является поводом жечь Gemini: L5 умеет честно отправить такой
-	// лот в CHECK/RARE_NO_MARKET без баллов.
+	// лот в CHECK без баллов.
 	var cachedText, cachedPhoto, cachedSearch bool
 	if gs, source, ok := loadCachedGeminiSpecs(ctx, cfg.ResearchDBPath, ad.AdID); ok {
 		tr.f("L3.cache: найден research_specs source=%s — использую как начальные спеки", source)
@@ -881,18 +879,6 @@ func Run(ctx context.Context, f *Funnel, cfg *config.Config, gem *vision.GeminiC
 		flush()
 		text := valueAlertText(code, ad, specsScore, lot, est, dev, nuance, stepUp, eval)
 		return Outcome{Code: code, Status: models.StatusAlerted, AlertText: text, AlertURL: ad.URL(), Audit: audit}
-	case vcMoose:
-		bump(code)
-		if !mooseAlertWorthy(priceEUR, cfg.MooseMinEUR) {
-			tr.f("ИТОГ: RARE_NO_MARKET тихо — сравнить не с чем · цена %.0f€ < порога %d€ (время не тратим)",
-				priceEUR, cfg.MooseMinEUR)
-			flush()
-			return Outcome{Code: code, Status: models.StatusNoDeal, Audit: audit}
-		}
-		tr.f("ИТОГ: RARE_NO_MARKET — редкое железо, сравнить не с чем → сводка в Telegram")
-		flush()
-		text := mooseAlertText(ad, specsScore, lot, nuance)
-		return Outcome{Code: code, Status: models.StatusNeedCheck, AlertText: text, AlertURL: ad.URL(), Audit: audit}
 	case vcCheck:
 		bump("CHECK")
 		tr.f("ИТОГ: CHECK — алерт «проверка» в Telegram")
@@ -1499,28 +1485,6 @@ func valueAlertText(code string, ad models.SearchAd, specsScore string, lot pric
 	}
 	if code == vcSuspect {
 		b.WriteString("\n⚠️ Слишком дёшево — проверь продавца (возможна приманка).\n")
-	}
-	fmt.Fprintf(&b, "\n🔗 %s", html.EscapeString(ad.URL()))
-	return b.String()
-}
-
-// mooseAlertText — «Редкое железо — сравнить не с чем» (PLAN_v8). Железо
-// опознано (часто ПРЯМО из объявления), но в наших данных KP нет группы для
-// сравнения цены. Текст не делает заявлений о продавце: формулировка v7
-// «владелец лось, но я добыл инфу» клеветала на продавцов, у которых все
-// характеристики были указаны в самом лоте (кейсы дня 2026-08-06).
-func mooseAlertText(ad models.SearchAd, specsScore string, lot pricing.Lot, nuance string) string {
-	var b strings.Builder
-	b.WriteString("🦌 <b>РЕДКОЕ ЖЕЛЕЗО — СРАВНИТЬ НЕ С ЧЕМ</b>\n\n")
-	fmt.Fprintf(&b, "<b>%s</b>\n", html.EscapeString(truncateRunes(ad.Name, 90)))
-	fmt.Fprintf(&b, "Железо: %s\n", html.EscapeString(specsScore))
-	if lot.Composite() > 0 {
-		fmt.Fprintf(&b, "Индекс: %.0f · %.0f/€1000\n", lot.Composite(), lot.ValuePer1000())
-	}
-	fmt.Fprintf(&b, "Цена: <b>€%.0f</b>\n", lot.Price)
-	b.WriteString("ℹ️ В наших данных KP нет похожих лотов — оценить цену не с чем. Реши по цифрам выше.\n")
-	if nuance != "" {
-		fmt.Fprintf(&b, "Нюанс: %s\n", html.EscapeString(nuance))
 	}
 	fmt.Fprintf(&b, "\n🔗 %s", html.EscapeString(ad.URL()))
 	return b.String()
